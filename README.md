@@ -7,7 +7,7 @@
 1. 打开 Chrome 的 `chrome://extensions/`。
 2. 开启“开发者模式”。
 3. 点击“加载已解压的扩展程序”。
-4. 选择本目录：`/Users/chy/projects/gsc-url-inspection`。
+4. 选择本项目目录。
 5. 打开 Google Search Console 的网址检查页面。
 6. 点击扩展图标，输入 sitemap URL 并解析，或手动粘贴 URL 列表。
 7. 点击“开始处理”。
