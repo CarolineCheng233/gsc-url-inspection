@@ -4,13 +4,21 @@
   "version": "0.1.0",
   "description": "Batch submit URLs to Google Search Console URL inspection and request indexing when needed.",
   "action": {
-    "default_title": "GSC URL Inspection Helper",
-    "default_popup": "popup.html"
+    "default_title": "GSC URL Inspection Helper"
   },
   "permissions": [
     "activeTab",
+    "debugger",
+    "sidePanel",
+    "tabs",
     "storage"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
   "host_permissions": [
     "http://*/*",
     "https://*/*"
@@ -22,9 +30,6 @@
       ],
       "js": [
         "content.js"
-      ],
-      "css": [
-        "content.css"
       ],
       "run_at": "document_idle"
     }

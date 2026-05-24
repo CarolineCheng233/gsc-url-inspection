@@ -15,7 +15,7 @@
 }
 
 body {
-  width: 420px;
+  min-width: 360px;
   margin: 0;
   background: var(--bg);
   color: var(--text);
@@ -23,11 +23,27 @@ body {
 }
 
 .app {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  gap: 12px;
   padding: 16px;
 }
 
+.header,
+.run-card,
+.section {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
 .header {
-  margin-bottom: 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  padding: 14px;
 }
 
 h1 {
@@ -39,7 +55,8 @@ h1 {
 
 .status,
 .hint,
-.meta {
+.meta,
+.current-url {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
@@ -51,7 +68,7 @@ h1 {
 }
 
 .section {
-  margin: 0 0 14px;
+  padding: 12px;
 }
 
 .label {
@@ -83,7 +100,7 @@ input[type="url"] {
 }
 
 textarea {
-  min-height: 180px;
+  min-height: 132px;
   padding: 10px;
   resize: vertical;
   white-space: pre;
@@ -109,6 +126,15 @@ button {
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.icon-button {
+  width: 34px;
+  min-height: 34px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 22px;
+  line-height: 1;
 }
 
 .primary {
@@ -155,8 +181,48 @@ button:not(:disabled):hover {
   color: var(--text);
 }
 
-.actions {
+.run-card {
+  min-height: 0;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.run-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
+  align-items: center;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.run-header strong {
+  display: block;
+  font-size: 16px;
+}
+
+.run-header span {
+  color: var(--muted);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.current-url {
+  min-height: 34px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+
+.log {
+  min-height: 220px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  color: #3c4043;
+  white-space: pre-wrap;
 }

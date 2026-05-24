@@ -2,6 +2,7 @@
 
 const elements = {
   pageStatus: document.querySelector("#pageStatus"),
+  closePanel: document.querySelector("#closePanel"),
   sitemapUrl: document.querySelector("#sitemapUrl"),
   loadSitemap: document.querySelector("#loadSitemap"),
   sitemapStatus: document.querySelector("#sitemapStatus"),
@@ -11,7 +12,11 @@ const elements = {
   requestIndexing: document.querySelector("#requestIndexing"),
   skipSubmitted: document.querySelector("#skipSubmitted"),
   startQueue: document.querySelector("#startQueue"),
-  stopQueue: document.querySelector("#stopQueue")
+  stopQueue: document.querySelector("#stopQueue"),
+  progressText: document.querySelector("#progressText"),
+  runState: document.querySelector("#runState"),
+  currentUrl: document.querySelector("#currentUrl"),
+  runLog: document.querySelector("#runLog")
 };
 
 const SITEMAP_LIMIT = 10000;
@@ -20,6 +25,8 @@ const SITEMAP_DEPTH_LIMIT = 4;
 let activeTabId = null;
 let isSupportedPage = false;
 let isRunning = false;
+let closing = false;
+let logs = [];
 
 init();
 
@@ -46,17 +53,25 @@ function bindEvents() {
     saveDraft();
   });
 
-  elements.loadSitemap.addEventListener("click", async () => {
-    await loadSitemap();
+  elements.loadSitemap.addEventListener("click", loadSitemap);
+  elements.startQueue.addEventListener("click", startQueue);
+  elements.stopQueue.addEventListener("click", stopQueue);
+  elements.closePanel.addEventListener("click", closeSidePanel);
+
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message?.type === "GSC_HELPER_STATE") {
+      updateRunState(message.state || {});
+    }
+    if (message?.type === "GSC_HELPER_LOG") {
+      addLog(message.message);
+      updateRunState(message.state || {});
+    }
   });
 
-  elements.startQueue.addEventListener("click", async () => {
-    await startQueue();
-  });
-
-  elements.stopQueue.addEventListener("click", async () => {
-    await sendToContent({ type: "GSC_HELPER_STOP_QUEUE" });
-    setRunning(false);
+  window.addEventListener("pagehide", () => {
+    if (!closing) {
+      chrome.runtime.sendMessage({ type: "GSC_HELPER_PANEL_CLOSED" });
+    }
   });
 }
 
@@ -87,9 +102,9 @@ async function inspectActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   activeTabId = tab?.id ?? null;
 
-  if (!activeTabId || !isGscInspectionUrl(tab.url)) {
+  if (!activeTabId || !isGscUrl(tab.url)) {
     isSupportedPage = false;
-    setPageStatus("请先打开 Google Search Console 的网址检查页面。", true);
+    setPageStatus("请先打开 Google Search Console 页面。", true);
     updateStartState();
     return;
   }
@@ -97,10 +112,9 @@ async function inspectActiveTab() {
   try {
     const state = await sendToContent({ type: "GSC_HELPER_GET_STATE" });
     isSupportedPage = Boolean(state?.supported);
-    isRunning = Boolean(state?.running);
-    setRunning(isRunning);
+    updateRunState(state || {});
     setPageStatus(isSupportedPage ? "已连接到 Search Console 页面。" : "当前页面不是可操作的 Search Console 页面。", !isSupportedPage);
-  } catch (error) {
+  } catch {
     isSupportedPage = false;
     setPageStatus("扩展脚本尚未就绪，请刷新 GSC 页面后重试。", true);
   }
@@ -108,10 +122,10 @@ async function inspectActiveTab() {
   updateStartState();
 }
 
-function isGscInspectionUrl(url) {
+function isGscUrl(url) {
   try {
     const parsed = new URL(url);
-    return parsed.hostname === "search.google.com" && parsed.pathname.startsWith("/search-console/inspect");
+    return parsed.hostname === "search.google.com" && parsed.pathname.startsWith("/search-console/");
   } catch {
     return false;
   }
@@ -138,8 +152,17 @@ function updateStartState() {
   elements.stopQueue.disabled = !isSupportedPage || !isRunning;
 }
 
-function setRunning(nextRunning) {
-  isRunning = nextRunning;
+function updateRunState(nextState) {
+  isRunning = Boolean(nextState.running);
+  elements.progressText.textContent = `${nextState.currentIndex || 0} / ${nextState.total || 0}`;
+  elements.runState.textContent = isRunning ? "运行中" : "空闲";
+  elements.currentUrl.textContent = nextState.currentUrl || "";
+
+  if (Array.isArray(nextState.logs) && nextState.logs.length > logs.length) {
+    logs = nextState.logs.slice(-200);
+    renderLogs();
+  }
+
   updateStartState();
 }
 
@@ -189,8 +212,7 @@ async function collectSitemapUrls(rootUrl) {
     seenSitemaps.add(normalizedSitemapUrl);
     const xmlText = await fetchText(normalizedSitemapUrl);
     const doc = new DOMParser().parseFromString(xmlText, "application/xml");
-    const parseError = doc.querySelector("parsererror");
-    if (parseError) {
+    if (doc.querySelector("parsererror")) {
       throw new Error(`Sitemap XML 解析失败：${normalizedSitemapUrl}`);
     }
 
@@ -248,10 +270,12 @@ async function startQueue() {
     return;
   }
 
-  setRunning(true);
+  logs = [];
+  renderLogs();
   saveDraft();
 
   try {
+    updateRunState({ running: true, currentIndex: 0, total: urls.length, currentUrl: "" });
     await sendToContent({
       type: "GSC_HELPER_START_QUEUE",
       urls,
@@ -260,11 +284,37 @@ async function startQueue() {
         skipSubmitted: elements.skipSubmitted.checked
       }
     });
-    setPageStatus("任务已开始，进度会显示在 GSC 页面右下角。");
+    setPageStatus("任务已开始。");
   } catch (error) {
-    setRunning(false);
+    updateRunState({ running: false, currentIndex: 0, total: urls.length, currentUrl: "" });
     setPageStatus(error.message || "启动任务失败。", true);
   }
+}
+
+async function stopQueue() {
+  await sendToContent({ type: "GSC_HELPER_STOP_QUEUE" });
+  updateRunState({ running: false });
+}
+
+async function closeSidePanel() {
+  closing = true;
+  await chrome.runtime.sendMessage({ type: "GSC_HELPER_PANEL_CLOSED" });
+  window.close();
+}
+
+function addLog(message) {
+  if (!message) {
+    return;
+  }
+
+  logs.push(message);
+  logs = logs.slice(-200);
+  renderLogs();
+}
+
+function renderLogs() {
+  elements.runLog.textContent = logs.join("\n");
+  elements.runLog.scrollTop = elements.runLog.scrollHeight;
 }
 
 function getUrlsFromTextarea() {

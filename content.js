@@ -23,13 +23,33 @@ const TEXT = {
   requestButton: [
     "request indexing",
     "请求编入索引",
-    "请求索引"
+    "请求索引",
+    "再次提交请求"
   ],
   requested: [
     "indexing requested",
     "已请求编入索引",
     "已请求索引",
-    "request submitted"
+    "request submitted",
+    "已将网址添加到优先抓取队列中"
+  ],
+  requesting: [
+    "正在测试实际网址可否编入索引",
+    "这可能需要花费",
+    "testing if live url can be indexed",
+    "submitting request"
+  ],
+  requestFailed: [
+    "已达到配额",
+    "已超今日配额",
+    "今日配额",
+    "每日配额",
+    "配额",
+    "quota",
+    "daily quota",
+    "无法请求",
+    "请求失败",
+    "出了点问题"
   ],
   checking: [
     "retrieving data",
@@ -45,6 +65,8 @@ const WAIT = {
   result: 120000,
   requestButton: 45000,
   requested: 120000,
+  suggestion: 8000,
+  inspectionStart: 20000,
   betweenUrls: 2500,
   poll: 500
 };
@@ -58,8 +80,6 @@ const state = {
   total: 0,
   logs: []
 };
-
-let panel = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   handleMessage(message).then(sendResponse).catch((error) => {
@@ -100,7 +120,7 @@ function publicState() {
 }
 
 function isSupportedPage() {
-  return location.hostname === "search.google.com" && location.pathname.startsWith("/search-console/inspect");
+  return location.hostname === "search.google.com" && location.pathname.startsWith("/search-console/");
 }
 
 function startQueue(urls, options) {
@@ -121,8 +141,8 @@ function startQueue(urls, options) {
   state.total = normalizedUrls.length;
   state.logs = [];
 
-  ensurePanel();
   log(`任务开始，共 ${state.total} 个 URL。`);
+  broadcastState();
   processQueue(options).catch((error) => {
     log(`任务异常：${error.message || error}`);
     finishQueue();
@@ -136,7 +156,7 @@ function stopQueue() {
 
   state.stopped = true;
   log("已收到停止指令，当前 URL 处理结束后停止。");
-  updatePanel();
+  broadcastState();
 }
 
 async function processQueue(options) {
@@ -148,12 +168,15 @@ async function processQueue(options) {
     const url = state.queue[index];
     state.currentIndex = index + 1;
     state.currentUrl = url;
-    updatePanel();
+    broadcastState();
 
     try {
       await processUrl(url, options);
     } catch (error) {
       log(`失败：${url} - ${error.message || error}`);
+      if (state.stopped) {
+        break;
+      }
     }
 
     await sleep(WAIT.betweenUrls);
@@ -172,8 +195,15 @@ async function processUrl(url, options) {
     return;
   }
 
-  if (result === "requested" && options.skipSubmitted) {
-    log(`已请求过：${url}`);
+  if (result === "requested") {
+    if (options.skipSubmitted) {
+      log(`已请求过，已按设置跳过：${url}`);
+      return;
+    }
+
+    log(`已请求过，准备再次提交请求：${url}`);
+    await requestIndexing();
+    log(`已再次提交请求：${url}`);
     return;
   }
 
@@ -194,11 +224,27 @@ async function processUrl(url, options) {
 
 async function submitInspectionUrl(url) {
   const input = await waitForElement(findInspectionInput, WAIT.input, "没有找到 GSC 网址检查输入框。");
-  focusAndSetValue(input, url);
-  await sleep(200);
-  input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
-  input.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", bubbles: true }));
-  await sleep(1000);
+  log("已找到网址检查输入框，正在填写 URL。");
+  await focusAndSetValue(input, url);
+  await sleep(500);
+
+  const suggestion = await waitForOptionalElement(() => findUrlSuggestion(url), WAIT.suggestion);
+  if (suggestion) {
+    log("已找到 GSC 候选项，正在点击进入检查。");
+    await trustedClickElement(suggestion);
+  } else {
+    const searchButton = findSearchButton(input);
+    if (!searchButton) {
+      log("未找到候选项和搜索按钮，尝试用回车提交检查。");
+      pressEnter(input);
+    } else {
+      log("未找到候选项，正在点击 GSC 搜索按钮提交检查。");
+      await trustedClickElement(searchButton);
+    }
+  }
+
+  await waitForInspectionStart(url);
+  log("GSC 已开始检查当前 URL。");
 }
 
 async function waitForInspectionResult() {
@@ -207,15 +253,9 @@ async function waitForInspectionResult() {
   while (Date.now() - startedAt < WAIT.result) {
     throwIfStopped();
 
-    const pageText = normalizedText(document.body.innerText);
-    if (containsAny(pageText, TEXT.requested)) {
-      return "requested";
-    }
-    if (containsAny(pageText, TEXT.notIndexed)) {
-      return "not-indexed";
-    }
-    if (containsAny(pageText, TEXT.indexed)) {
-      return "indexed";
+    const visibleStatus = getVisibleInspectionStatus();
+    if (visibleStatus) {
+      return visibleStatus;
     }
 
     await sleep(WAIT.poll);
@@ -226,18 +266,36 @@ async function waitForInspectionResult() {
 
 async function requestIndexing() {
   const button = await waitForElement(findRequestIndexingButton, WAIT.requestButton, "没有找到“请求编入索引”按钮。");
-  clickElement(button);
+  log("已找到“请求编入索引”按钮，正在点击。");
+  await trustedClickElement(button);
+  await sleep(1000);
+  if (!containsAny(getGscPageText(), [...TEXT.requesting, ...TEXT.requested, ...TEXT.requestFailed])) {
+    log("点击后 GSC 未响应，正在基于同一按钮 DOM 重试。");
+    await clickElement(button);
+  }
+  log("已点击“请求编入索引”，等待 GSC 响应。");
 
+  let sawRequesting = false;
   await waitForCondition(() => {
-    const pageText = normalizedText(document.body.innerText);
+    const pageText = getGscPageText();
+    if (containsAny(pageText, TEXT.requestFailed)) {
+      state.stopped = true;
+      throw new Error("GSC 请求编入索引失败或达到配额。");
+    }
+    if (!sawRequesting && containsAny(pageText, TEXT.requesting)) {
+      sawRequesting = true;
+      log("GSC 正在测试实际网址可否编入索引。");
+    }
     return containsAny(pageText, TEXT.requested);
   }, WAIT.requested, "请求编入索引后没有等到成功提示。");
+  log("GSC 已显示请求成功，正在关闭提示。");
+  await closeRequestResultDialog();
 }
 
 function findInspectionInput() {
   const candidates = [
     ...document.querySelectorAll("input[type='text'], input[type='search'], input:not([type]), textarea, [contenteditable='true']")
-  ].filter(isVisible);
+  ].filter((element) => isVisible(element) && !isDisabled(element) && !isReadOnly(element) && !isInHelperPanel(element));
 
   return candidates.find((element) => {
     const text = normalizedText([
@@ -250,10 +308,12 @@ function findInspectionInput() {
   }) || candidates[0] || null;
 }
 
-function findRequestIndexingButton() {
+function findSearchButton(input) {
+  const form = input.closest("form");
   const candidates = [
+    ...(form ? form.querySelectorAll("button, [role='button']") : []),
     ...document.querySelectorAll("button, [role='button']")
-  ].filter((element) => isVisible(element) && !isDisabled(element));
+  ].filter((element) => isVisible(element) && !isDisabled(element) && !isInHelperPanel(element));
 
   return candidates.find((element) => {
     const text = normalizedText([
@@ -262,13 +322,82 @@ function findRequestIndexingButton() {
       element.getAttribute("aria-label"),
       element.getAttribute("title")
     ].join(" "));
-    return containsAny(text, TEXT.requestButton);
+    return text === "搜索" || text === "search";
   }) || null;
 }
 
-function focusAndSetValue(element, value) {
+function findUrlSuggestion(url) {
+  const urlText = normalizedText(url);
+  const shortUrlText = normalizedText(url.replace(/^https?:\/\//i, ""));
+  const candidates = [
+    ...document.querySelectorAll("[role='option'], [role='menuitem'], [role='button'], a, li, div[tabindex]")
+  ].filter((element) => isVisible(element) && !isDisabled(element) && !isInHelperPanel(element));
+
+  return candidates.find((element) => {
+    const text = normalizedText([
+      element.innerText,
+      element.textContent,
+      element.getAttribute("aria-label"),
+      element.getAttribute("title")
+    ].join(" "));
+    return text.includes(urlText) || text.includes(shortUrlText);
+  }) || null;
+}
+
+function findRequestIndexingButton() {
+  const candidates = [
+    ...document.querySelectorAll("button, [role='button']")
+  ].filter((element) => isVisible(element) && !isDisabled(element) && !isInHelperPanel(element));
+
+  return candidates.find((element) => {
+    const visibleText = normalizedText(element.innerText || element.textContent || "");
+    const labelText = normalizedText([
+      element.getAttribute("aria-label"),
+      element.getAttribute("title")
+    ].join(" "));
+    return visibleText === "请求编入索引"
+      || visibleText === "再次提交请求"
+      || visibleText === "request indexing"
+      || containsAny(labelText, TEXT.requestButton);
+  }) || null;
+}
+
+function findDialogCloseButton() {
+  const dialog = findRequestResultDialog();
+  const root = dialog || document;
+  const candidates = [
+    ...root.querySelectorAll("button, [role='button']")
+  ].filter((element) => isVisible(element) && !isDisabled(element) && !isInHelperPanel(element));
+
+  return candidates.find((element) => {
+    const visibleText = normalizedText(element.innerText || element.textContent || "");
+    const labelText = normalizedText([
+      element.getAttribute("aria-label"),
+      element.getAttribute("title")
+    ].join(" "));
+    return visibleText === "关闭"
+      || visibleText === "close"
+      || labelText === "关闭"
+      || labelText === "close";
+  }) || null;
+}
+
+function findRequestResultDialog() {
+  const candidates = [
+    ...document.querySelectorAll("[role='dialog'], [role='alertdialog'], div, section")
+  ].filter((element) => isVisible(element) && !isInHelperPanel(element));
+
+  return candidates.find((element) => {
+    const text = getVisibleText(element);
+    return containsAny(text, TEXT.requested)
+      && (text.includes("关闭") || text.includes("close"));
+  }) || null;
+}
+
+async function focusAndSetValue(element, value) {
+  element.scrollIntoView({ block: "center", inline: "center" });
+  await trustedClickElement(element);
   element.focus();
-  element.click();
 
   if (element.isContentEditable) {
     document.execCommand("selectAll", false);
@@ -279,6 +408,10 @@ function focusAndSetValue(element, value) {
 
   const prototype = element.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
   const valueSetter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+  if (!valueSetter) {
+    throw new Error("找到的元素不是可写入的输入框。");
+  }
+
   valueSetter?.call(element, "");
   element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward", data: null }));
   valueSetter?.call(element, value);
@@ -286,12 +419,111 @@ function focusAndSetValue(element, value) {
   element.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-function clickElement(element) {
+function pressEnter(element) {
+  element.focus();
+  element.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+  element.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+  element.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+}
+
+async function clickElement(element) {
   element.scrollIntoView({ block: "center", inline: "center" });
-  element.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
-  element.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-  element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  await sleep(100);
+  const rect = element.getBoundingClientRect();
+  const x = Math.round(rect.left + rect.width / 2);
+  const y = Math.round(rect.top + rect.height / 2);
+  const eventTarget = document.elementFromPoint(x, y) || element;
+
+  dispatchPointerLikeEvent(eventTarget, "pointerover", x, y);
+  dispatchPointerLikeEvent(eventTarget, "mouseover", x, y);
+  dispatchPointerLikeEvent(eventTarget, "mousemove", x, y);
+  dispatchPointerLikeEvent(eventTarget, "pointerdown", x, y);
+  dispatchPointerLikeEvent(eventTarget, "mousedown", x, y);
+  dispatchPointerLikeEvent(eventTarget, "pointerup", x, y);
+  dispatchPointerLikeEvent(eventTarget, "mouseup", x, y);
+  dispatchPointerLikeEvent(eventTarget, "click", x, y);
   element.click();
+}
+
+function dispatchPointerLikeEvent(element, type, x, y) {
+  const eventInit = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    view: window,
+    detail: type === "click" ? 1 : 0,
+    screenX: window.screenX + x,
+    screenY: window.screenY + y,
+    clientX: x,
+    clientY: y,
+    button: 0,
+    buttons: type.endsWith("down") ? 1 : 0
+  };
+
+  if (type.startsWith("pointer") && typeof PointerEvent === "function") {
+    element.dispatchEvent(new PointerEvent(type, {
+      ...eventInit,
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true
+    }));
+    return;
+  }
+
+  element.dispatchEvent(new MouseEvent(type, eventInit));
+}
+
+async function trustedClickElement(element) {
+  element.scrollIntoView({ block: "center", inline: "center" });
+  await sleep(100);
+
+  const rect = element.getBoundingClientRect();
+  const x = Math.round(rect.left + rect.width / 2);
+  const y = Math.round(rect.top + rect.height / 2);
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "GSC_HELPER_CDP_CLICK",
+      x,
+      y
+    });
+
+    if (response?.ok === false) {
+      throw new Error(response.error || "CDP 点击失败。");
+    }
+  } catch (error) {
+    log(`真实鼠标点击失败，改用 DOM 点击：${error.message || error}`);
+    await clickElement(element);
+  }
+}
+
+async function closeRequestResultDialog() {
+  const closeButton = await waitForElement(findDialogCloseButton, 15000, "请求成功后没有找到提示框关闭按钮。");
+  log("已找到请求成功提示的关闭按钮，正在点击。");
+  await clickElement(closeButton);
+  await sleep(1000);
+  if (containsAny(getGscPageText(), ["已将网址添加到优先抓取队列中"])) {
+    log("首次关闭点击后提示仍存在，正在重试关闭。");
+    await clickElement(closeButton);
+  }
+  await waitForCondition(() => !containsAny(getGscPageText(), ["已将网址添加到优先抓取队列中"]), 15000, "点击关闭后成功提示仍未消失。");
+  log("已关闭请求成功提示。");
+}
+
+async function waitForInspectionStart(url) {
+  const startHref = location.href;
+  const startUrlParam = new URLSearchParams(location.search).get("id");
+
+  return waitForCondition(() => {
+    const pageText = getGscPageText();
+    const currentUrlParam = new URLSearchParams(location.search).get("id");
+    return (location.pathname.startsWith("/search-console/inspect") && currentUrlParam && currentUrlParam !== startUrlParam)
+      || location.href !== startHref
+      || containsAny(pageText, TEXT.checking)
+      || containsAny(pageText, TEXT.indexed)
+      || containsAny(pageText, TEXT.notIndexed)
+      || containsAny(pageText, TEXT.requested);
+  }, WAIT.inspectionStart, "GSC 没有开始检查该 URL，请确认顶部输入框是否可用。");
 }
 
 function waitForElement(getElement, timeout, message) {
@@ -299,6 +531,21 @@ function waitForElement(getElement, timeout, message) {
     const element = getElement();
     return element || false;
   }, timeout, message);
+}
+
+async function waitForOptionalElement(getElement, timeout) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeout) {
+    throwIfStopped();
+    const element = getElement();
+    if (element) {
+      return element;
+    }
+    await sleep(WAIT.poll);
+  }
+
+  return null;
 }
 
 async function waitForCondition(check, timeout, message) {
@@ -326,58 +573,100 @@ function finishQueue() {
   state.running = false;
   state.currentUrl = "";
   log(state.stopped ? "任务已停止。" : "任务完成。");
-  updatePanel();
-}
-
-function ensurePanel() {
-  if (panel) {
-    panel.hidden = false;
-    updatePanel();
-    return;
-  }
-
-  panel = document.createElement("aside");
-  panel.id = "gsc-helper-panel";
-  panel.innerHTML = `
-    <div class="gsc-helper-header">
-      <h2 class="gsc-helper-title">GSC URL Inspection Helper</h2>
-      <button class="gsc-helper-stop" type="button">停止</button>
-    </div>
-    <div class="gsc-helper-body">
-      <div class="gsc-helper-progress">
-        <span data-role="progress">0 / 0</span>
-        <span data-role="state">空闲</span>
-      </div>
-      <div class="gsc-helper-current" data-role="current"></div>
-    </div>
-    <pre class="gsc-helper-log" data-role="log"></pre>
-  `;
-
-  panel.querySelector(".gsc-helper-stop").addEventListener("click", stopQueue);
-  document.documentElement.appendChild(panel);
-  updatePanel();
-}
-
-function updatePanel() {
-  if (!panel) {
-    return;
-  }
-
-  panel.hidden = false;
-  panel.querySelector("[data-role='progress']").textContent = `${state.currentIndex} / ${state.total}`;
-  panel.querySelector("[data-role='state']").textContent = state.running ? "运行中" : "空闲";
-  panel.querySelector("[data-role='current']").textContent = state.currentUrl || "";
-  panel.querySelector("[data-role='log']").textContent = state.logs.slice(-80).join("\n");
 }
 
 function log(message) {
   const time = new Date().toLocaleTimeString();
-  state.logs.push(`[${time}] ${message}`);
-  updatePanel();
+  const line = `[${time}] ${message}`;
+  state.logs.push(line);
+  state.logs = state.logs.slice(-200);
+  chrome.runtime.sendMessage({
+    type: "GSC_HELPER_LOG",
+    message: line,
+    state: publicState()
+  }).catch(() => {});
+}
+
+function broadcastState() {
+  chrome.runtime.sendMessage({
+    type: "GSC_HELPER_STATE",
+    state: publicState()
+  }).catch(() => {});
 }
 
 function normalizedText(value) {
   return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function getVisibleInspectionStatus() {
+  const statusCard = findInspectionStatusCard();
+  const statusText = statusCard ? getVisibleText(statusCard) : getGscPageText();
+
+  if (containsAny(statusText, TEXT.requested)) {
+    return "requested";
+  }
+  if (containsAny(statusText, TEXT.notIndexed)) {
+    return "not-indexed";
+  }
+  if (containsAny(statusText, TEXT.indexed)) {
+    return "indexed";
+  }
+
+  return "";
+}
+
+function findInspectionStatusCard() {
+  const elements = [
+    ...document.querySelectorAll("[role='main'] div, main div, section, article")
+  ].filter((element) => isVisible(element) && !isInHelperPanel(element));
+
+  return elements.find((element) => {
+    const text = getVisibleText(element);
+    return containsAny(text, TEXT.indexed)
+      || containsAny(text, TEXT.notIndexed)
+      || containsAny(text, TEXT.requested);
+  }) || null;
+}
+
+function getGscPageText() {
+  return getVisibleText(document.body);
+}
+
+function getVisibleText(root) {
+  const textParts = [];
+  collectVisibleText(root, textParts);
+  return normalizedText(textParts.join(" "));
+}
+
+function collectVisibleText(node, textParts) {
+  if (node.nodeType === Node.TEXT_NODE) {
+    const parent = node.parentElement;
+    if (parent && !parent.closest("#gsc-helper-panel") && isVisibleTextNodeParent(parent)) {
+      textParts.push(node.textContent);
+    }
+    return;
+  }
+
+  if (node.nodeType !== Node.ELEMENT_NODE && node.nodeType !== Node.DOCUMENT_NODE) {
+    return;
+  }
+
+  if (node.nodeType === Node.ELEMENT_NODE && node.closest("#gsc-helper-panel")) {
+    return;
+  }
+
+  for (const child of Array.from(node.childNodes)) {
+    collectVisibleText(child, textParts);
+  }
+}
+
+function isVisibleTextNodeParent(element) {
+  const style = getComputedStyle(element);
+  if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) {
+    return false;
+  }
+
+  return Boolean(element.getClientRects().length);
 }
 
 function containsAny(text, needles) {
@@ -397,6 +686,14 @@ function isVisible(element) {
 
 function isDisabled(element) {
   return element.disabled || element.getAttribute("aria-disabled") === "true";
+}
+
+function isReadOnly(element) {
+  return element.readOnly || element.getAttribute("readonly") !== null;
+}
+
+function isInHelperPanel(element) {
+  return false;
 }
 
 function mergeUrls(urls) {
