@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "GSC URL Inspection Helper",
+  "version": "0.1.0",
+  "description": "Batch submit URLs to Google Search Console URL inspection and request indexing when needed.",
+  "action": {
+    "default_title": "GSC URL Inspection Helper",
+    "default_popup": "popup.html"
+  },
+  "permissions": [
+    "activeTab",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://search.google.com/search-console/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

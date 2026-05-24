@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GSC URL Inspection Helper</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <h1>GSC URL Inspection</h1>
+        <p id="pageStatus" class="status">正在检测当前页面...</p>
+      </header>
+
+      <section class="section">
+        <label class="label" for="sitemapUrl">Sitemap URL</label>
+        <div class="row">
+          <input id="sitemapUrl" type="url" placeholder="https://example.com/sitemap.xml" autocomplete="off">
+          <button id="loadSitemap" type="button">解析</button>
+        </div>
+        <p id="sitemapStatus" class="hint"></p>
+      </section>
+
+      <section class="section">
+        <label class="label" for="urlList">待检查 URL，每行一个</label>
+        <textarea id="urlList" rows="10" spellcheck="false" placeholder="https://example.com/page-1&#10;https://example.com/page-2"></textarea>
+        <div class="meta">
+          <span id="urlCount">0 个 URL</span>
+          <button id="clearUrls" class="ghost" type="button">清空</button>
+        </div>
+      </section>
+
+      <section class="section options">
+        <label class="checkbox">
+          <input id="requestIndexing" type="checkbox" checked>
+          <span>未收录时自动请求编入索引</span>
+        </label>
+        <label class="checkbox">
+          <input id="skipSubmitted" type="checkbox" checked>
+          <span>已显示请求成功时跳过</span>
+        </label>
+      </section>
+
+      <footer class="actions">
+        <button id="stopQueue" class="secondary" type="button" disabled>停止</button>
+        <button id="startQueue" class="primary" type="button" disabled>开始处理</button>
+      </footer>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
