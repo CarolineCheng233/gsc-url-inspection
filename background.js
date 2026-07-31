@@ -10,12 +10,15 @@ chrome.runtime.onStartup.addListener(() => {
 
 if (chrome.sidePanel?.onClosed) {
   chrome.sidePanel.onClosed.addListener(() => {
-    stopAllGscQueues();
+    stopAllQueues();
   });
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type === "GSC_HELPER_CDP_CLICK") {
+  if (
+    message?.type === "GSC_HELPER_CDP_CLICK"
+    || message?.type === "BRAVE_HELPER_CDP_CLICK"
+  ) {
     dispatchClick(sender.tab?.id, message.x, message.y)
       .then(() => sendResponse({ ok: true }))
       .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
@@ -23,7 +26,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === "GSC_HELPER_PANEL_CLOSED") {
-    stopAllGscQueues()
+    stopAllQueues()
       .then(() => sendResponse({ ok: true }))
       .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
     return true;
@@ -40,18 +43,27 @@ function setupSidePanelBehavior() {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 }
 
-async function stopAllGscQueues() {
-  const tabs = await chrome.tabs.query({ url: "https://search.google.com/search-console/*" });
-  await Promise.all(tabs.map((tab) => sendStopMessage(tab.id)));
+async function stopAllQueues() {
+  const tabs = await chrome.tabs.query({
+    url: [
+      "https://search.google.com/search-console/*",
+      "https://search.brave.com/submit-url*"
+    ]
+  });
+  await Promise.all(tabs.map((tab) => sendStopMessage(tab)));
 }
 
-async function sendStopMessage(tabId) {
-  if (!tabId) {
+async function sendStopMessage(tab) {
+  if (!tab?.id) {
     return;
   }
 
+  const type = tab.url?.startsWith("https://search.brave.com/submit-url")
+    ? "BRAVE_HELPER_STOP"
+    : "GSC_HELPER_STOP_QUEUE";
+
   try {
-    await chrome.tabs.sendMessage(tabId, { type: "GSC_HELPER_STOP_QUEUE" });
+    await chrome.tabs.sendMessage(tab.id, { type });
   } catch {
     // The content script may not be injected on every matching tab.
   }

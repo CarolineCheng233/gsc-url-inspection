@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "GSC URL Inspection Helper",
-  "version": "0.1.0",
-  "description": "Batch submit URLs to Google Search Console URL inspection and request indexing when needed.",
+  "version": "0.2.0",
+  "description": "Batch inspect URLs in Google Search Console or submit URLs to Brave Search.",
   "action": {
     "default_title": "GSC URL Inspection Helper"
   },
@@ -30,6 +30,15 @@
       ],
       "js": [
         "content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://search.brave.com/submit-url*"
+      ],
+      "js": [
+        "brave-content.js"
       ],
       "run_at": "document_idle"
     }

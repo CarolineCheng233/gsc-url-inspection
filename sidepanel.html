@@ -26,7 +26,7 @@
       </section>
 
       <section class="section">
-        <label class="label" for="urlList">待检查 URL，每行一个</label>
+        <label id="urlListLabel" class="label" for="urlList">待检查 URL，每行一个</label>
         <textarea id="urlList" rows="8" spellcheck="false" placeholder="https://example.com/page-1&#10;https://example.com/page-2"></textarea>
         <div class="meta">
           <span id="urlCount">0 个 URL</span>
@@ -34,7 +34,7 @@
         </div>
       </section>
 
-      <section class="section options">
+      <section id="gscOptions" class="section options">
         <label class="checkbox">
           <input id="requestIndexing" type="checkbox" checked>
           <span>未收录时自动请求编入索引</span>

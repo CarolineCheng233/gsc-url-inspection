@@ -7,8 +7,10 @@ const elements = {
   loadSitemap: document.querySelector("#loadSitemap"),
   sitemapStatus: document.querySelector("#sitemapStatus"),
   urlList: document.querySelector("#urlList"),
+  urlListLabel: document.querySelector("#urlListLabel"),
   urlCount: document.querySelector("#urlCount"),
   clearUrls: document.querySelector("#clearUrls"),
+  gscOptions: document.querySelector("#gscOptions"),
   requestIndexing: document.querySelector("#requestIndexing"),
   skipSubmitted: document.querySelector("#skipSubmitted"),
   startQueue: document.querySelector("#startQueue"),
@@ -21,10 +23,22 @@ const elements = {
 
 const SITEMAP_LIMIT = 10000;
 const SITEMAP_DEPTH_LIMIT = 4;
+const ENGINE = {
+  gsc: "gsc",
+  brave: "brave"
+};
+const BRAVE_WAIT = {
+  contentReady: 30000,
+  tabLoad: 30000,
+  betweenUrls: 2500,
+  poll: 250
+};
 
 let activeTabId = null;
+let activeEngine = null;
 let isSupportedPage = false;
 let isRunning = false;
+let braveStopRequested = false;
 let closing = false;
 let logs = [];
 
@@ -101,25 +115,49 @@ function saveDraft() {
 async function inspectActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   activeTabId = tab?.id ?? null;
+  activeEngine = getPageEngine(tab?.url);
+  updateEngineUi();
 
-  if (!activeTabId || !isGscUrl(tab.url)) {
+  if (!activeTabId || !activeEngine) {
     isSupportedPage = false;
-    setPageStatus("请先打开 Google Search Console 页面。", true);
+    setPageStatus("请先打开 Google Search Console 或 Brave URL 提交页面。", true);
     updateStartState();
     return;
   }
 
   try {
-    const state = await sendToContent({ type: "GSC_HELPER_GET_STATE" });
+    const type = activeEngine === ENGINE.brave
+      ? "BRAVE_HELPER_GET_STATE"
+      : "GSC_HELPER_GET_STATE";
+    const state = await sendToContent({ type });
     isSupportedPage = Boolean(state?.supported);
-    updateRunState(state || {});
-    setPageStatus(isSupportedPage ? "已连接到 Search Console 页面。" : "当前页面不是可操作的 Search Console 页面。", !isSupportedPage);
+    if (activeEngine === ENGINE.gsc) {
+      updateRunState(state || {});
+    }
+    const engineName = activeEngine === ENGINE.brave
+      ? "Brave URL 提交页面"
+      : "Search Console 页面";
+    setPageStatus(
+      isSupportedPage ? `已连接到 ${engineName}。` : `当前页面不是可操作的 ${engineName}。`,
+      !isSupportedPage
+    );
   } catch {
     isSupportedPage = false;
-    setPageStatus("扩展脚本尚未就绪，请刷新 GSC 页面后重试。", true);
+    const engineName = activeEngine === ENGINE.brave ? "Brave" : "GSC";
+    setPageStatus(`扩展脚本尚未就绪，请刷新 ${engineName} 页面后重试。`, true);
   }
 
   updateStartState();
+}
+
+function getPageEngine(url) {
+  if (isGscUrl(url)) {
+    return ENGINE.gsc;
+  }
+  if (isBraveSubmitUrl(url)) {
+    return ENGINE.brave;
+  }
+  return null;
 }
 
 function isGscUrl(url) {
@@ -129,6 +167,25 @@ function isGscUrl(url) {
   } catch {
     return false;
   }
+}
+
+function isBraveSubmitUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === "search.brave.com"
+      && parsed.pathname === "/submit-url";
+  } catch {
+    return false;
+  }
+}
+
+function updateEngineUi() {
+  const isBrave = activeEngine === ENGINE.brave;
+  elements.urlListLabel.textContent = isBrave
+    ? "待提交到 Brave 的 URL，每行一个"
+    : "待检查 URL，每行一个";
+  elements.gscOptions.hidden = isBrave;
+  elements.startQueue.textContent = isBrave ? "开始提交" : "开始";
 }
 
 function setPageStatus(message, isError = false) {
@@ -274,6 +331,11 @@ async function startQueue() {
   renderLogs();
   saveDraft();
 
+  if (activeEngine === ENGINE.brave) {
+    await startBraveQueue(urls);
+    return;
+  }
+
   try {
     updateRunState({ running: true, currentIndex: 0, total: urls.length, currentUrl: "" });
     await sendToContent({
@@ -292,8 +354,162 @@ async function startQueue() {
 }
 
 async function stopQueue() {
+  if (activeEngine === ENGINE.brave) {
+    braveStopRequested = true;
+    elements.runState.textContent = "停止中";
+    elements.stopQueue.disabled = true;
+    try {
+      await sendToContent({ type: "BRAVE_HELPER_STOP" });
+    } catch {
+      // Reloading a Brave page can temporarily disconnect its content script.
+    }
+    return;
+  }
+
   await sendToContent({ type: "GSC_HELPER_STOP_QUEUE" });
   updateRunState({ running: false });
+}
+
+async function startBraveQueue(urls) {
+  braveStopRequested = false;
+  let currentIndex = 0;
+  updateRunState({
+    running: true,
+    currentIndex: 0,
+    total: urls.length,
+    currentUrl: ""
+  });
+  addTimestampedLog(`Brave 提交任务开始，共 ${urls.length} 个 URL。`);
+  setPageStatus("Brave 提交任务运行中，请保持当前标签页和侧边栏打开。");
+
+  try {
+    for (let index = 0; index < urls.length; index += 1) {
+      throwIfBraveStopped();
+      await ensureBravePageReady();
+
+      const url = urls[index];
+      currentIndex = index + 1;
+      updateRunState({
+        running: true,
+        currentIndex,
+        total: urls.length,
+        currentUrl: url
+      });
+      addTimestampedLog(`正在提交：${url}`);
+
+      await sendToContent({
+        type: "BRAVE_HELPER_SUBMIT_URL",
+        url
+      });
+      addTimestampedLog(`Brave 已接受：${url}`);
+
+      if (index < urls.length - 1) {
+        await waitForBraveDelay();
+        throwIfBraveStopped();
+        addTimestampedLog("正在刷新 Brave 页面以处理下一条 URL。");
+        await reloadBravePage();
+      }
+    }
+
+    addTimestampedLog("Brave 提交任务完成。");
+    setPageStatus("Brave 提交任务完成。");
+  } catch (error) {
+    if (braveStopRequested || error.message === "任务已停止。") {
+      addTimestampedLog("Brave 提交任务已停止。");
+      setPageStatus("Brave 提交任务已停止。");
+    } else {
+      addTimestampedLog(`Brave 提交任务失败：${error.message || error}`);
+      setPageStatus(error.message || "Brave 提交任务失败。", true);
+    }
+  } finally {
+    updateRunState({
+      running: false,
+      currentIndex,
+      total: urls.length,
+      currentUrl: ""
+    });
+  }
+}
+
+async function ensureBravePageReady() {
+  let pageState = await waitForBraveContent();
+  if (pageState.submitted || pageState.error) {
+    addTimestampedLog("Brave 页面已有提交结果，正在刷新后继续。");
+    pageState = await reloadBravePage();
+  }
+
+  if (pageState.running || pageState.verifying) {
+    throw new Error("Brave 页面正在处理其他提交，请稍后重试。");
+  }
+  if (!pageState.ready) {
+    throw new Error("Brave URL 提交表单尚未就绪。");
+  }
+}
+
+async function reloadBravePage() {
+  if (!activeTabId) {
+    throw new Error("没有可用的 Brave 标签页。");
+  }
+
+  await chrome.tabs.reload(activeTabId);
+  await waitForBraveTabLoad();
+  return waitForBraveContent();
+}
+
+async function waitForBraveTabLoad() {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < BRAVE_WAIT.tabLoad) {
+    throwIfBraveStopped();
+    const tab = await chrome.tabs.get(activeTabId);
+    if (!isBraveSubmitUrl(tab.url)) {
+      throw new Error("Brave 提交标签页已离开 /submit-url。");
+    }
+    if (tab.status === "complete") {
+      return;
+    }
+    await sleep(BRAVE_WAIT.poll);
+  }
+
+  throw new Error("刷新 Brave 提交页面超时。");
+}
+
+async function waitForBraveContent() {
+  const startedAt = Date.now();
+  let lastError;
+
+  while (Date.now() - startedAt < BRAVE_WAIT.contentReady) {
+    throwIfBraveStopped();
+    try {
+      const state = await sendToContent({ type: "BRAVE_HELPER_GET_STATE" });
+      if (state?.supported) {
+        return state;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(BRAVE_WAIT.poll);
+  }
+
+  throw lastError || new Error("Brave 页面脚本加载超时。");
+}
+
+async function waitForBraveDelay() {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < BRAVE_WAIT.betweenUrls) {
+    throwIfBraveStopped();
+    await sleep(Math.min(BRAVE_WAIT.poll, BRAVE_WAIT.betweenUrls));
+  }
+}
+
+function throwIfBraveStopped() {
+  if (braveStopRequested) {
+    throw new Error("任务已停止。");
+  }
+}
+
+function addTimestampedLog(message) {
+  addLog(`[${new Date().toLocaleTimeString()}] ${message}`);
 }
 
 async function closeSidePanel() {
@@ -362,8 +578,12 @@ function sendToContent(message) {
 
   return chrome.tabs.sendMessage(activeTabId, message).then((response) => {
     if (response?.ok === false) {
-      throw new Error(response.error || "GSC 页面脚本返回失败。");
+      throw new Error(response.error || "页面脚本返回失败。");
     }
     return response;
   });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
