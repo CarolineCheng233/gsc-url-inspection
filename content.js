@@ -1,13 +1,6 @@
 "use strict";
 
 const TEXT = {
-  inspectInput: [
-    "inspect any url",
-    "检查任何网址",
-    "检查任意网址",
-    "网址检查",
-    "url inspection"
-  ],
   indexed: [
     "url is on google",
     "网址已在 google 上",
@@ -20,12 +13,6 @@ const TEXT = {
     "网址不在 google 上",
     "未编入索引",
     "不在 google 上"
-  ],
-  requestButton: [
-    "request indexing",
-    "请求编入索引",
-    "请求索引",
-    "再次提交请求"
   ],
   requested: [
     "indexing requested",
@@ -59,6 +46,13 @@ const TEXT = {
     "正在测试实时网址",
     "testing live url"
   ]
+};
+
+const GSC_SELECTORS = {
+  inspectionNavigation: 'a[role="button"][jsname="YhhZY"]',
+  inspectionInput: 'input[role="combobox"][jsname="dSO9oc"]',
+  requestIndexing: 'span[data-eventcategory="INSPECT-URL"][data-eventaction="request_indexing"] [role="button"]',
+  dialogClose: 'button[data-mdc-dialog-action="ok"]'
 };
 
 const WAIT = {
@@ -237,19 +231,13 @@ async function submitInspectionUrl(url) {
   await focusAndSetValue(input, url);
   await sleep(500);
 
-  const suggestion = await waitForOptionalElement(() => findUrlSuggestion(url), WAIT.suggestion);
+  const suggestion = await waitForOptionalElement(() => findUrlSuggestion(input), WAIT.suggestion);
   if (suggestion) {
     log("已找到 GSC 候选项，正在点击进入检查。");
     await trustedClickElement(suggestion);
   } else {
-    const searchButton = findSearchButton(input);
-    if (!searchButton) {
-      log("未找到候选项和搜索按钮，尝试用回车提交检查。");
-      pressEnter(input);
-    } else {
-      log("未找到候选项，正在点击 GSC 搜索按钮提交检查。");
-      await trustedClickElement(searchButton);
-    }
+    log("未找到候选项，尝试用回车提交检查。");
+    pressEnter(input);
   }
 
   const inspectionId = await waitForInspectionStart(previousInspection);
@@ -317,127 +305,40 @@ async function requestIndexing() {
 }
 
 function findInspectionInput() {
-  const candidates = [
-    ...document.querySelectorAll("input[type='text'], input[type='search'], input:not([type]), textarea, [contenteditable='true']")
-  ].filter((element) => isVisible(element) && !isDisabled(element) && !isReadOnly(element) && !isInHelperPanel(element));
-
-  return candidates.find((element) => {
-    const text = normalizedText([
-      element.getAttribute("aria-label"),
-      element.getAttribute("placeholder"),
-      element.getAttribute("title"),
-      closestText(element)
-    ].join(" "));
-    return containsAny(text, TEXT.inspectInput)
-      || (text.includes("检查") && text.includes("任何网址"))
-      || (text.includes("inspect") && text.includes("url"));
-  }) || null;
+  const input = document.querySelector(GSC_SELECTORS.inspectionInput);
+  return input && isVisible(input) && !isDisabled(input) && !isReadOnly(input)
+    ? input
+    : null;
 }
 
 function findInspectionNavigation() {
-  const candidates = [
-    ...document.querySelectorAll("a, button, [role='button']")
-  ].filter((element) => isVisible(element) && !isDisabled(element) && !isInHelperPanel(element));
-
-  return candidates.find((element) => {
-    const text = normalizedText([
-      element.innerText,
-      element.textContent,
-      element.getAttribute("aria-label"),
-      element.getAttribute("title")
-    ].join(" "));
-    return isInspectionNavigationText(text);
-  }) || null;
+  const navigation = document.querySelector(GSC_SELECTORS.inspectionNavigation);
+  return navigation && isVisible(navigation) && !isDisabled(navigation)
+    ? navigation
+    : null;
 }
 
-function isInspectionNavigationText(text) {
-  return text.includes("网址检查") || text.includes("url inspection");
-}
-
-function findSearchButton(input) {
-  const form = input.closest("form");
-  const candidates = [
-    ...(form ? form.querySelectorAll("button, [role='button']") : []),
-    ...document.querySelectorAll("button, [role='button']")
-  ].filter((element) => isVisible(element) && !isDisabled(element) && !isInHelperPanel(element));
-
-  return candidates.find((element) => {
-    const text = normalizedText([
-      element.innerText,
-      element.textContent,
-      element.getAttribute("aria-label"),
-      element.getAttribute("title")
-    ].join(" "));
-    return text === "搜索" || text === "search";
-  }) || null;
-}
-
-function findUrlSuggestion(url) {
-  const urlText = normalizedText(url);
-  const shortUrlText = normalizedText(url.replace(/^https?:\/\//i, ""));
-  const candidates = [
-    ...document.querySelectorAll("[role='option'], [role='menuitem'], [role='button'], a, li, div[tabindex]")
-  ].filter((element) => isVisible(element) && !isDisabled(element) && !isInHelperPanel(element));
-
-  return candidates.find((element) => {
-    const text = normalizedText([
-      element.innerText,
-      element.textContent,
-      element.getAttribute("aria-label"),
-      element.getAttribute("title")
-    ].join(" "));
-    return text.includes(urlText) || text.includes(shortUrlText);
-  }) || null;
+function findUrlSuggestion(input) {
+  const listId = input.getAttribute("aria-controls");
+  const list = listId ? document.getElementById(listId) : null;
+  const suggestion = list?.querySelector("[role='option']");
+  return suggestion && isVisible(suggestion) && !isDisabled(suggestion)
+    ? suggestion
+    : null;
 }
 
 function findRequestIndexingButton() {
-  const candidates = [
-    ...document.querySelectorAll("button, [role='button']")
-  ].filter((element) => isVisible(element) && !isDisabled(element) && !isInHelperPanel(element));
-
-  return candidates.find((element) => {
-    const visibleText = normalizedText(element.innerText || element.textContent || "");
-    const labelText = normalizedText([
-      element.getAttribute("aria-label"),
-      element.getAttribute("title")
-    ].join(" "));
-    return visibleText === "请求编入索引"
-      || visibleText === "再次提交请求"
-      || visibleText === "request indexing"
-      || containsAny(labelText, TEXT.requestButton);
-  }) || null;
+  const button = document.querySelector(GSC_SELECTORS.requestIndexing);
+  return button && isVisible(button) && !isDisabled(button)
+    ? button
+    : null;
 }
 
 function findDialogCloseButton() {
-  const dialog = findRequestResultDialog();
-  const root = dialog || document;
-  const candidates = [
-    ...root.querySelectorAll("button, [role='button']")
-  ].filter((element) => isVisible(element) && !isDisabled(element) && !isInHelperPanel(element));
-
-  return candidates.find((element) => {
-    const visibleText = normalizedText(element.innerText || element.textContent || "");
-    const labelText = normalizedText([
-      element.getAttribute("aria-label"),
-      element.getAttribute("title")
-    ].join(" "));
-    return visibleText === "关闭"
-      || visibleText === "close"
-      || labelText === "关闭"
-      || labelText === "close";
-  }) || null;
-}
-
-function findRequestResultDialog() {
-  const candidates = [
-    ...document.querySelectorAll("[role='dialog'], [role='alertdialog'], div, section")
-  ].filter((element) => isVisible(element) && !isInHelperPanel(element));
-
-  return candidates.find((element) => {
-    const text = getVisibleText(element);
-    return containsAny(text, TEXT.requested)
-      && (text.includes("关闭") || text.includes("close"));
-  }) || null;
+  const button = document.querySelector(GSC_SELECTORS.dialogClose);
+  return button && isVisible(button) && !isDisabled(button)
+    ? button
+    : null;
 }
 
 async function focusAndSetValue(element, value) {
@@ -753,11 +654,6 @@ function isVisibleTextNodeParent(element) {
 
 function containsAny(text, needles) {
   return needles.some((needle) => text.includes(needle));
-}
-
-function closestText(element) {
-  const container = element.closest("[role='search'], header, form, div");
-  return container?.innerText || "";
 }
 
 function isVisible(element) {
