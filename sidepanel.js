@@ -321,6 +321,11 @@ async function fetchText(url) {
 }
 
 async function startQueue() {
+  await inspectActiveTab();
+  if (!isSupportedPage) {
+    return;
+  }
+
   const urls = getUrlsFromTextarea();
   if (urls.length === 0) {
     setPageStatus("请先输入 URL。", true);

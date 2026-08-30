@@ -24,7 +24,13 @@ async function loadSidePanel() {
   const source = fs.readFileSync(path.join(__dirname, "sidepanel.js"), "utf8");
   const elements = new Map();
   const submittedUrls = [];
+  const sentMessages = [];
   let reloadCount = 0;
+  let activeTab = {
+    id: 7,
+    status: "complete",
+    url: "https://search.brave.com/submit-url"
+  };
 
   const context = vm.createContext({
     chrome: {
@@ -44,15 +50,12 @@ async function loadSidePanel() {
           status: "complete",
           url: "https://search.brave.com/submit-url"
         }),
-        query: async () => [{
-          id: 7,
-          status: "complete",
-          url: "https://search.brave.com/submit-url"
-        }],
+        query: async () => [activeTab],
         reload: async () => {
           reloadCount += 1;
         },
-        sendMessage: async (_tabId, message) => {
+        sendMessage: async (tabId, message) => {
+          sentMessages.push({ tabId, message });
           if (message.type === "BRAVE_HELPER_GET_STATE") {
             return {
               ok: true,
@@ -67,6 +70,9 @@ async function loadSidePanel() {
           if (message.type === "BRAVE_HELPER_SUBMIT_URL") {
             submittedUrls.push(message.url);
             return { ok: true, status: "submitted" };
+          }
+          if (message.type === "GSC_HELPER_GET_STATE") {
+            return { ok: true, supported: true, running: false };
           }
           return { ok: true };
         }
@@ -106,6 +112,10 @@ async function loadSidePanel() {
     context,
     elements,
     getReloadCount: () => reloadCount,
+    sentMessages,
+    setActiveTab: (tab) => {
+      activeTab = tab;
+    },
     submittedUrls
   };
 }
@@ -137,5 +147,26 @@ test("侧边栏只在 Brave 官方提交页启用 Brave 模式", async () => {
   assert.equal(
     vm.runInContext("getPageEngine('https://search.brave.com/search?q=test')", harness.context),
     null
+  );
+});
+
+test("开始前重新识别活动标签，避免将 GSC 队列发到旧 Brave 标签", async () => {
+  const harness = await loadSidePanel();
+  harness.setActiveTab({
+    id: 8,
+    status: "complete",
+    url: "https://search.google.com/search-console/performance/search-analytics"
+  });
+  harness.elements.get("#urlList").value = "https://new.example/";
+
+  await vm.runInContext("startQueue()", harness.context);
+
+  const startMessage = harness.sentMessages.find(({ message }) => (
+    message.type === "GSC_HELPER_START_QUEUE"
+  ));
+  assert.equal(startMessage.tabId, 8);
+  assert.equal(
+    harness.sentMessages.some(({ message }) => message.type === "BRAVE_HELPER_SUBMIT_URL"),
+    false
   );
 });
