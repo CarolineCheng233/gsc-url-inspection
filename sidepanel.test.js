@@ -28,7 +28,7 @@ async function loadSidePanel() {
   const injectedScripts = [];
   let reloadCount = 0;
   let failNextSend = false;
-  let gscContentScriptVersion = "2026-08-30.9";
+  let gscContentScriptVersion = "2026-08-30.10";
   let activeTab = {
     id: 7,
     status: "complete",
@@ -57,7 +57,7 @@ async function loadSidePanel() {
         query: async () => [activeTab],
         reload: async () => {
           reloadCount += 1;
-          gscContentScriptVersion = "2026-08-30.9";
+          gscContentScriptVersion = "2026-08-30.10";
         },
         sendMessage: async (tabId, message) => {
           if (failNextSend) {

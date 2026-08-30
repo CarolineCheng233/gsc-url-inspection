@@ -174,7 +174,7 @@ test("状态响应携带内容脚本版本", () => {
 
   assert.equal(
     vm.runInContext("publicState().contentScriptVersion", context),
-    "2026-08-30.9"
+    "2026-08-30.10"
   );
 });
 

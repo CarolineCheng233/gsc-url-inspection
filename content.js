@@ -1,6 +1,6 @@
 "use strict";
 
-const GSC_CONTENT_SCRIPT_VERSION = "2026-08-30.9";
+const GSC_CONTENT_SCRIPT_VERSION = "2026-08-30.10";
 
 const TEXT = {
   indexed: [
