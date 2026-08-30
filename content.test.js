@@ -127,7 +127,6 @@ test("使用实际 GSC 元素选择器", () => {
   assert.deepEqual(
     JSON.parse(vm.runInContext("JSON.stringify(GSC_SELECTORS)", context)),
     {
-      inspectionNavigation: 'a[role="button"][jsname="YhhZY"]',
       inspectionInput: 'input[role="combobox"][jsname="dSO9oc"]',
       requestIndexing: 'span[data-eventcategory="INSPECT-URL"][data-eventaction="request_indexing"] [role="button"]',
       dialogClose: 'button[data-mdc-dialog-action="ok"]'

@@ -49,7 +49,6 @@ const TEXT = {
 };
 
 const GSC_SELECTORS = {
-  inspectionNavigation: 'a[role="button"][jsname="YhhZY"]',
   inspectionInput: 'input[role="combobox"][jsname="dSO9oc"]',
   requestIndexing: 'span[data-eventcategory="INSPECT-URL"][data-eventaction="request_indexing"] [role="button"]',
   dialogClose: 'button[data-mdc-dialog-action="ok"]'
@@ -57,7 +56,6 @@ const GSC_SELECTORS = {
 
 const WAIT = {
   input: 30000,
-  inspectionPage: 20000,
   result: 120000,
   requestButton: 45000,
   requested: 120000,
@@ -224,7 +222,6 @@ async function processUrl(url, options) {
 }
 
 async function submitInspectionUrl(url) {
-  await ensureInspectionPage();
   const input = await waitForElement(findInspectionInput, WAIT.input, "没有找到 GSC 网址检查输入框。");
   const previousInspection = getInspectionSnapshot();
   log("已找到网址检查输入框，正在填写 URL。");
@@ -308,13 +305,6 @@ function findInspectionInput() {
   const input = document.querySelector(GSC_SELECTORS.inspectionInput);
   return input && isVisible(input) && !isDisabled(input) && !isReadOnly(input)
     ? input
-    : null;
-}
-
-function findInspectionNavigation() {
-  const navigation = document.querySelector(GSC_SELECTORS.inspectionNavigation);
-  return navigation && isVisible(navigation) && !isDisabled(navigation)
-    ? navigation
     : null;
 }
 
@@ -455,25 +445,6 @@ async function closeRequestResultDialog() {
   }
   await waitForCondition(() => !containsAny(getGscPageText(), ["已将网址添加到优先抓取队列中"]), 15000, "点击关闭后成功提示仍未消失。");
   log("已关闭请求成功提示。");
-}
-
-async function ensureInspectionPage() {
-  if (location.pathname.startsWith("/search-console/inspect")) {
-    return;
-  }
-
-  const navigation = await waitForElement(
-    findInspectionNavigation,
-    WAIT.inspectionPage,
-    "没有找到 GSC 的“网址检查”导航项。"
-  );
-  log("正在进入 GSC“网址检查”页面。");
-  await trustedClickElement(navigation);
-  await waitForCondition(
-    () => location.pathname.startsWith("/search-console/inspect"),
-    WAIT.inspectionPage,
-    "GSC 没有进入“网址检查”页面。"
-  );
 }
 
 async function waitForInspectionStart(previousInspection) {
