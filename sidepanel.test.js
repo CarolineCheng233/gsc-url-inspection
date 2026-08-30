@@ -25,7 +25,9 @@ async function loadSidePanel() {
   const elements = new Map();
   const submittedUrls = [];
   const sentMessages = [];
+  const injectedScripts = [];
   let reloadCount = 0;
+  let failNextSend = false;
   let activeTab = {
     id: 7,
     status: "complete",
@@ -44,6 +46,11 @@ async function loadSidePanel() {
           set: async () => {}
         }
       },
+      scripting: {
+        executeScript: async (details) => {
+          injectedScripts.push(details);
+        }
+      },
       tabs: {
         get: async () => ({
           id: 7,
@@ -55,6 +62,10 @@ async function loadSidePanel() {
           reloadCount += 1;
         },
         sendMessage: async (tabId, message) => {
+          if (failNextSend) {
+            failNextSend = false;
+            throw new Error("Could not establish connection. Receiving end does not exist.");
+          }
           sentMessages.push({ tabId, message });
           if (message.type === "BRAVE_HELPER_GET_STATE") {
             return {
@@ -112,6 +123,10 @@ async function loadSidePanel() {
     context,
     elements,
     getReloadCount: () => reloadCount,
+    injectedScripts,
+    failNextSend: () => {
+      failNextSend = true;
+    },
     sentMessages,
     setActiveTab: (tab) => {
       activeTab = tab;
@@ -169,4 +184,22 @@ test("开始前重新识别活动标签，避免将 GSC 队列发到旧 Brave �
     harness.sentMessages.some(({ message }) => message.type === "BRAVE_HELPER_SUBMIT_URL"),
     false
   );
+});
+
+test("页面脚本未注入时自动注入后重试", async () => {
+  const harness = await loadSidePanel();
+  harness.setActiveTab({
+    id: 8,
+    status: "complete",
+    url: "https://search.google.com/search-console/performance/search-analytics"
+  });
+  harness.failNextSend();
+
+  await vm.runInContext("inspectActiveTab()", harness.context);
+
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(harness.injectedScripts)),
+    [{ target: { tabId: 8 }, files: ["content.js"] }]
+  );
+  assert.equal(harness.elements.get("#pageStatus").textContent, "已连接到 Search Console 页面。");
 });

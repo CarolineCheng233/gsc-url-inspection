@@ -21,6 +21,7 @@
   "permissions": [
     "activeTab",
     "debugger",
+    "scripting",
     "sidePanel",
     "tabs",
     "storage"

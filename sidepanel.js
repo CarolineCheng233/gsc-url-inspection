@@ -581,11 +581,36 @@ function sendToContent(message) {
     return Promise.reject(new Error("没有可用的活动标签页。"));
   }
 
-  return chrome.tabs.sendMessage(activeTabId, message).then((response) => {
+  return sendMessageToContent(message).then((response) => {
     if (response?.ok === false) {
       throw new Error(response.error || "页面脚本返回失败。");
     }
     return response;
+  });
+}
+
+async function sendMessageToContent(message) {
+  try {
+    return await chrome.tabs.sendMessage(activeTabId, message);
+  } catch (error) {
+    if (!isMissingContentScript(error)) {
+      throw error;
+    }
+
+    await injectContentScript();
+    return chrome.tabs.sendMessage(activeTabId, message);
+  }
+}
+
+function isMissingContentScript(error) {
+  return String(error?.message || error).includes("Receiving end does not exist");
+}
+
+async function injectContentScript() {
+  const file = activeEngine === ENGINE.brave ? "brave-content.js" : "content.js";
+  await chrome.scripting.executeScript({
+    target: { tabId: activeTabId },
+    files: [file]
   });
 }
 
