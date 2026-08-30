@@ -27,6 +27,11 @@ const ENGINE = {
   gsc: "gsc",
   brave: "brave"
 };
+const GSC_CONTENT_SCRIPT_VERSION = "2026-08-30.9";
+const GSC_WAIT = {
+  tabLoad: 30000,
+  poll: 250
+};
 const BRAVE_WAIT = {
   contentReady: 30000,
   tabLoad: 30000,
@@ -129,7 +134,10 @@ async function inspectActiveTab() {
     const type = activeEngine === ENGINE.brave
       ? "BRAVE_HELPER_GET_STATE"
       : "GSC_HELPER_GET_STATE";
-    const state = await sendToContent({ type });
+    let state = await sendToContent({ type });
+    if (activeEngine === ENGINE.gsc) {
+      state = await ensureCurrentGscContentScript(state);
+    }
     isSupportedPage = Boolean(state?.supported);
     if (activeEngine === ENGINE.gsc) {
       updateRunState(state || {});
@@ -148,6 +156,33 @@ async function inspectActiveTab() {
   }
 
   updateStartState();
+}
+
+async function ensureCurrentGscContentScript(pageState) {
+  if (pageState?.contentScriptVersion === GSC_CONTENT_SCRIPT_VERSION) {
+    return pageState;
+  }
+
+  await chrome.tabs.reload(activeTabId);
+  await waitForGscTabLoad();
+  return sendToContent({ type: "GSC_HELPER_GET_STATE" });
+}
+
+async function waitForGscTabLoad() {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < GSC_WAIT.tabLoad) {
+    const tab = await chrome.tabs.get(activeTabId);
+    if (!isGscUrl(tab.url)) {
+      throw new Error("GSC 标签页已离开 Search Console。");
+    }
+    if (tab.status === "complete") {
+      return;
+    }
+    await sleep(GSC_WAIT.poll);
+  }
+
+  throw new Error("刷新 GSC 页面超时。");
 }
 
 function getPageEngine(url) {

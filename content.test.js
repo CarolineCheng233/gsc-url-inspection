@@ -134,6 +134,15 @@ test("使用实际 GSC 元素选择器", () => {
   );
 });
 
+test("状态响应携带内容脚本版本", () => {
+  const { context } = loadContentScript();
+
+  assert.equal(
+    vm.runInContext("publicState().contentScriptVersion", context),
+    "2026-08-30.9"
+  );
+});
+
 test("检查状态未知时不能请求索引", async () => {
   const { context } = loadContentScript();
 

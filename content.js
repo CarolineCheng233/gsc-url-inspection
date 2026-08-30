@@ -1,5 +1,7 @@
 "use strict";
 
+const GSC_CONTENT_SCRIPT_VERSION = "2026-08-30.9";
+
 const TEXT = {
   indexed: [
     "url is on google",
@@ -105,6 +107,7 @@ async function handleMessage(message) {
 
 function publicState() {
   return {
+    contentScriptVersion: GSC_CONTENT_SCRIPT_VERSION,
     running: state.running,
     currentIndex: state.currentIndex,
     total: state.total,

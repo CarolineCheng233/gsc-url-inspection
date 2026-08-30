@@ -28,6 +28,7 @@ async function loadSidePanel() {
   const injectedScripts = [];
   let reloadCount = 0;
   let failNextSend = false;
+  let gscContentScriptVersion = "2026-08-30.9";
   let activeTab = {
     id: 7,
     status: "complete",
@@ -52,14 +53,11 @@ async function loadSidePanel() {
         }
       },
       tabs: {
-        get: async () => ({
-          id: 7,
-          status: "complete",
-          url: "https://search.brave.com/submit-url"
-        }),
+        get: async () => activeTab,
         query: async () => [activeTab],
         reload: async () => {
           reloadCount += 1;
+          gscContentScriptVersion = "2026-08-30.9";
         },
         sendMessage: async (tabId, message) => {
           if (failNextSend) {
@@ -83,7 +81,12 @@ async function loadSidePanel() {
             return { ok: true, status: "submitted" };
           }
           if (message.type === "GSC_HELPER_GET_STATE") {
-            return { ok: true, supported: true, running: false };
+            return {
+              ok: true,
+              supported: true,
+              running: false,
+              contentScriptVersion: gscContentScriptVersion
+            };
           }
           return { ok: true };
         }
@@ -130,6 +133,9 @@ async function loadSidePanel() {
     sentMessages,
     setActiveTab: (tab) => {
       activeTab = tab;
+    },
+    setGscContentScriptVersion: (version) => {
+      gscContentScriptVersion = version;
     },
     submittedUrls
   };
@@ -201,5 +207,21 @@ test("页面脚本未注入时自动注入后重试", async () => {
     JSON.parse(JSON.stringify(harness.injectedScripts)),
     [{ target: { tabId: 8 }, files: ["content.js"] }]
   );
+  assert.equal(harness.elements.get("#pageStatus").textContent, "已连接到 Search Console 页面。");
+});
+
+test("旧 GSC 内容脚本仍可响应时会刷新页面加载当前版本", async () => {
+  const harness = await loadSidePanel();
+  harness.setActiveTab({
+    id: 8,
+    status: "complete",
+    url: "https://search.google.com/search-console/performance/search-analytics"
+  });
+  harness.setGscContentScriptVersion("legacy-version");
+
+  const reloadsBeforeInspection = harness.getReloadCount();
+  await vm.runInContext("inspectActiveTab()", harness.context);
+
+  assert.equal(harness.getReloadCount(), reloadsBeforeInspection + 1);
   assert.equal(harness.elements.get("#pageStatus").textContent, "已连接到 Search Console 页面。");
 });
