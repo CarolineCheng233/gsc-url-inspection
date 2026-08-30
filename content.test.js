@@ -19,6 +19,7 @@ function loadContentScript() {
     console,
     document: {
       body: {},
+      querySelector: () => null,
       querySelectorAll: () => []
     },
     chrome: {
@@ -128,10 +129,44 @@ test("使用实际 GSC 元素选择器", () => {
     JSON.parse(vm.runInContext("JSON.stringify(GSC_SELECTORS)", context)),
     {
       inspectionInput: 'input[role="combobox"][jsname="dSO9oc"]',
-      requestIndexing: 'span[data-eventcategory="INSPECT-URL"][data-eventaction="request_indexing"] [role="button"]',
+      requestIndexing: 'div[role="button"][aria-label][aria-disabled="false"]:has(> .ZFr60d.CeoRYc)',
       dialogClose: 'button[data-mdc-dialog-action="ok"]'
     }
   );
+});
+
+test("检查 URL 时使用真实回车，不点击不精确的候选项", async () => {
+  const { context } = loadContentScript();
+
+  vm.runInContext(`
+    let enterCount = 0;
+    waitForElement = async () => ({ focus: () => {} });
+    getInspectionSnapshot = () => ({ href: location.href, inspectionId: "old", status: "indexed" });
+    focusAndSetValue = async () => {};
+    pressEnter = async () => { enterCount += 1; };
+    waitForInspectionStart = async () => "new";
+    log = () => {};
+  `, context);
+
+  assert.equal(
+    await vm.runInContext('submitInspectionUrl("https://example.com/page")', context),
+    "new"
+  );
+  assert.equal(vm.runInContext("enterCount", context), 1);
+});
+
+test("请求索引时只选择可见的结构化按钮", () => {
+  const { context } = loadContentScript();
+
+  vm.runInContext(`
+    const hiddenButton = { id: "hidden" };
+    const visibleButton = { id: "visible" };
+    document.querySelectorAll = () => [hiddenButton, visibleButton];
+    isVisible = (element) => element === visibleButton;
+    isDisabled = () => false;
+  `, context);
+
+  assert.equal(vm.runInContext("findRequestIndexingButton().id", context), "visible");
 });
 
 test("状态响应携带内容脚本版本", () => {

@@ -25,6 +25,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "GSC_HELPER_CDP_KEY" && message.key === "Enter") {
+    dispatchEnterKey(sender.tab?.id)
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+    return true;
+  }
+
   if (message?.type === "GSC_HELPER_PANEL_CLOSED") {
     stopAllQueues()
       .then(() => sendResponse({ ok: true }))
@@ -97,6 +104,36 @@ async function dispatchClick(tabId, x, y) {
       y,
       button: "left",
       clickCount: 1
+    });
+  } finally {
+    await detachDebugger(target);
+  }
+}
+
+async function dispatchEnterKey(tabId) {
+  if (!tabId) {
+    throw new Error("无法获取当前标签页 ID。");
+  }
+
+  const target = { tabId };
+  await attachDebugger(target);
+
+  try {
+    await sendCommand(target, "Input.dispatchKeyEvent", {
+      type: "keyDown",
+      key: "Enter",
+      code: "Enter",
+      text: "\r",
+      unmodifiedText: "\r",
+      windowsVirtualKeyCode: 13,
+      nativeVirtualKeyCode: 13
+    });
+    await sendCommand(target, "Input.dispatchKeyEvent", {
+      type: "keyUp",
+      key: "Enter",
+      code: "Enter",
+      windowsVirtualKeyCode: 13,
+      nativeVirtualKeyCode: 13
     });
   } finally {
     await detachDebugger(target);

@@ -52,7 +52,7 @@ const TEXT = {
 
 const GSC_SELECTORS = {
   inspectionInput: 'input[role="combobox"][jsname="dSO9oc"]',
-  requestIndexing: 'span[data-eventcategory="INSPECT-URL"][data-eventaction="request_indexing"] [role="button"]',
+  requestIndexing: 'div[role="button"][aria-label][aria-disabled="false"]:has(> .ZFr60d.CeoRYc)',
   dialogClose: 'button[data-mdc-dialog-action="ok"]'
 };
 
@@ -61,7 +61,6 @@ const WAIT = {
   result: 120000,
   requestButton: 45000,
   requested: 120000,
-  suggestion: 8000,
   inspectionStart: 20000,
   betweenUrls: 2500,
   poll: 500
@@ -229,16 +228,8 @@ async function submitInspectionUrl(url) {
   const previousInspection = getInspectionSnapshot();
   log("已找到网址检查输入框，正在填写 URL。");
   await focusAndSetValue(input, url);
-  await sleep(500);
-
-  const suggestion = await waitForOptionalElement(() => findUrlSuggestion(input), WAIT.suggestion);
-  if (suggestion) {
-    log("已找到 GSC 候选项，正在点击进入检查。");
-    await trustedClickElement(suggestion);
-  } else {
-    log("未找到候选项，尝试用回车提交检查。");
-    pressEnter(input);
-  }
+  log("已填写 URL，正在使用真实回车进入检查。");
+  await pressEnter(input);
 
   const inspectionId = await waitForInspectionStart(previousInspection);
   log("GSC 已开始检查当前 URL。");
@@ -311,20 +302,9 @@ function findInspectionInput() {
     : null;
 }
 
-function findUrlSuggestion(input) {
-  const listId = input.getAttribute("aria-controls");
-  const list = listId ? document.getElementById(listId) : null;
-  const suggestion = list?.querySelector("[role='option']");
-  return suggestion && isVisible(suggestion) && !isDisabled(suggestion)
-    ? suggestion
-    : null;
-}
-
 function findRequestIndexingButton() {
-  const button = document.querySelector(GSC_SELECTORS.requestIndexing);
-  return button && isVisible(button) && !isDisabled(button)
-    ? button
-    : null;
+  return Array.from(document.querySelectorAll(GSC_SELECTORS.requestIndexing))
+    .find((button) => isVisible(button) && !isDisabled(button)) || null;
 }
 
 function findDialogCloseButton() {
@@ -359,11 +339,12 @@ async function focusAndSetValue(element, value) {
   element.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-function pressEnter(element) {
+async function pressEnter(element) {
   element.focus();
-  element.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
-  element.dispatchEvent(new KeyboardEvent("keypress", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
-  element.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+  const response = await chrome.runtime.sendMessage({ type: "GSC_HELPER_CDP_KEY", key: "Enter" });
+  if (response?.ok === false) {
+    throw new Error(response.error || "无法向 GSC 输入框发送真实回车。");
+  }
 }
 
 async function clickElement(element) {
