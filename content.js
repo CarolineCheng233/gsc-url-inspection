@@ -16,6 +16,7 @@ const TEXT = {
   ],
   notIndexed: [
     "url is not on google",
+    "网址尚未收录到 google",
     "网址不在 google 上",
     "未编入索引",
     "不在 google 上"
@@ -62,6 +63,7 @@ const TEXT = {
 
 const WAIT = {
   input: 30000,
+  inspectionPage: 20000,
   result: 120000,
   requestButton: 45000,
   requested: 120000,
@@ -187,8 +189,8 @@ async function processQueue(options) {
 
 async function processUrl(url, options) {
   log(`检查：${url}`);
-  await submitInspectionUrl(url);
-  const result = await waitForInspectionResult(url);
+  const inspectionId = await submitInspectionUrl(url);
+  const result = await waitForInspectionResult(inspectionId);
 
   if (result === "indexed") {
     log(`已收录：${url}`);
@@ -228,6 +230,7 @@ async function processUrl(url, options) {
 }
 
 async function submitInspectionUrl(url) {
+  await ensureInspectionPage();
   const input = await waitForElement(findInspectionInput, WAIT.input, "没有找到 GSC 网址检查输入框。");
   const previousInspection = getInspectionSnapshot();
   log("已找到网址检查输入框，正在填写 URL。");
@@ -249,13 +252,13 @@ async function submitInspectionUrl(url) {
     }
   }
 
-  await waitForInspectionStart(url, previousInspection);
+  const inspectionId = await waitForInspectionStart(previousInspection);
   log("GSC 已开始检查当前 URL。");
+  return inspectionId;
 }
 
-async function waitForInspectionResult(url) {
+async function waitForInspectionResult(inspectionId) {
   const startedAt = Date.now();
-  const targetUrl = normalizeUrl(url);
 
   while (Date.now() - startedAt < WAIT.result) {
     throwIfStopped();
@@ -265,7 +268,7 @@ async function waitForInspectionResult(url) {
       continue;
     }
 
-    if (getCurrentInspectedUrl() !== targetUrl) {
+    if (getInspectionId() !== inspectionId) {
       await sleep(WAIT.poll);
       continue;
     }
@@ -278,8 +281,8 @@ async function waitForInspectionResult(url) {
     await sleep(WAIT.poll);
   }
 
-  if (getCurrentInspectedUrl() !== targetUrl) {
-    throw new Error("GSC 当前检查的网址与目标 URL 不一致。");
+  if (getInspectionId() !== inspectionId) {
+    throw new Error("GSC 当前检查页面已切换，无法确认目标 URL 的结果。");
   }
 
   return "unknown";
@@ -325,8 +328,26 @@ function findInspectionInput() {
       element.getAttribute("title"),
       closestText(element)
     ].join(" "));
-    return containsAny(text, TEXT.inspectInput);
-  }) || candidates[0] || null;
+    return containsAny(text, TEXT.inspectInput)
+      || (text.includes("检查") && text.includes("任何网址"))
+      || (text.includes("inspect") && text.includes("url"));
+  }) || null;
+}
+
+function findInspectionNavigation() {
+  const candidates = [
+    ...document.querySelectorAll("a, button, [role='button']")
+  ].filter((element) => isVisible(element) && !isDisabled(element) && !isInHelperPanel(element));
+
+  return candidates.find((element) => {
+    const text = normalizedText([
+      element.innerText,
+      element.textContent,
+      element.getAttribute("aria-label"),
+      element.getAttribute("title")
+    ].join(" "));
+    return text === "网址检查" || text === "url inspection";
+  }) || null;
 }
 
 function findSearchButton(input) {
@@ -521,46 +542,66 @@ async function trustedClickElement(element) {
 async function closeRequestResultDialog() {
   const closeButton = await waitForElement(findDialogCloseButton, 15000, "请求成功后没有找到提示框关闭按钮。");
   log("已找到请求成功提示的关闭按钮，正在点击。");
-  await clickElement(closeButton);
+  await trustedClickElement(closeButton);
   await sleep(1000);
   if (containsAny(getGscPageText(), ["已将网址添加到优先抓取队列中"])) {
     log("首次关闭点击后提示仍存在，正在重试关闭。");
-    await clickElement(closeButton);
+    await trustedClickElement(closeButton);
   }
   await waitForCondition(() => !containsAny(getGscPageText(), ["已将网址添加到优先抓取队列中"]), 15000, "点击关闭后成功提示仍未消失。");
   log("已关闭请求成功提示。");
 }
 
-async function waitForInspectionStart(url, previousInspection) {
-  const targetUrl = normalizeUrl(url);
+async function ensureInspectionPage() {
+  if (location.pathname.startsWith("/search-console/inspect")) {
+    return;
+  }
 
+  const navigation = await waitForElement(
+    findInspectionNavigation,
+    WAIT.inspectionPage,
+    "没有找到 GSC 的“网址检查”导航项。"
+  );
+  log("正在进入 GSC“网址检查”页面。");
+  await trustedClickElement(navigation);
+  await waitForCondition(
+    () => location.pathname.startsWith("/search-console/inspect"),
+    WAIT.inspectionPage,
+    "GSC 没有进入“网址检查”页面。"
+  );
+}
+
+async function waitForInspectionStart(previousInspection) {
   return waitForCondition(() => {
     const pageText = getGscPageText();
-    if (containsAny(pageText, TEXT.checking)) {
-      return true;
+    const inspectionId = getInspectionId();
+    const navigationChanged = location.href !== previousInspection.href
+      || inspectionId !== previousInspection.inspectionId;
+    if (!navigationChanged) {
+      return false;
     }
 
-    const currentInspectedUrl = getCurrentInspectedUrl();
-    const reachedTarget = currentInspectedUrl === targetUrl;
-    const navigationChanged = location.href !== previousInspection.href
-      || currentInspectedUrl !== previousInspection.inspectedUrl;
+    if (containsAny(pageText, TEXT.checking)) {
+      return inspectionId;
+    }
+
     const currentStatus = getVisibleInspectionStatus();
     const statusChanged = currentStatus !== previousInspection.status;
 
-    return reachedTarget && navigationChanged && (!currentStatus || statusChanged);
+    return !currentStatus || statusChanged ? inspectionId : false;
   }, WAIT.inspectionStart, "GSC 没有开始检查该 URL，请确认顶部输入框是否可用。");
 }
 
 function getInspectionSnapshot() {
   return {
     href: location.href,
-    inspectedUrl: getCurrentInspectedUrl(),
+    inspectionId: getInspectionId(),
     status: getVisibleInspectionStatus()
   };
 }
 
-function getCurrentInspectedUrl() {
-  return normalizeUrl(new URLSearchParams(location.search).get("id") || "");
+function getInspectionId() {
+  return new URLSearchParams(location.search).get("id") || location.href;
 }
 
 function waitForElement(getElement, timeout, message) {

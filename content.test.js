@@ -11,8 +11,8 @@ function loadContentScript() {
   const location = {
     hostname: "search.google.com",
     pathname: "/search-console/inspect",
-    href: "https://search.google.com/search-console/inspect?resource_id=site&id=https%3A%2F%2Fold.example%2F",
-    search: "?resource_id=site&id=https%3A%2F%2Fold.example%2F"
+    href: "https://search.google.com/search-console/inspect?resource_id=site&id=old-inspection",
+    search: "?resource_id=site&id=old-inspection"
   };
   const context = vm.createContext({
     clearTimeout,
@@ -53,9 +53,9 @@ test("上一条已请求状态不能被当作下一条检查已开始", async ()
   const { context } = loadContentScript();
   setInspectionStatus(context, "已请求编入索引", "requested");
 
-  const wait = vm.runInContext(`waitForInspectionStart("https://new.example/", {
+  const wait = vm.runInContext(`waitForInspectionStart({
     href: location.href,
-    inspectedUrl: "https://old.example/",
+    inspectionId: "old-inspection",
     status: "requested"
   })`, context);
 
@@ -66,15 +66,15 @@ test("新 URL 进入加载态后只读取该 URL 的新结果", async () => {
   const { context, location } = loadContentScript();
   setInspectionStatus(context, "已请求编入索引", "requested");
 
-  const waitForStart = vm.runInContext(`waitForInspectionStart("https://new.example/", {
+  const waitForStart = vm.runInContext(`waitForInspectionStart({
     href: location.href,
-    inspectedUrl: "https://old.example/",
+    inspectionId: "old-inspection",
     status: "requested"
   })`, context);
 
   setTimeout(() => {
-    location.href = "https://search.google.com/search-console/inspect?resource_id=site&id=https%3A%2F%2Fnew.example%2F";
-    location.search = "?resource_id=site&id=https%3A%2F%2Fnew.example%2F";
+    location.href = "https://search.google.com/search-console/inspect?resource_id=site&id=new-inspection";
+    location.search = "?resource_id=site&id=new-inspection";
   }, 2);
   setTimeout(() => {
     context.pageText = "正在从 google 索引中检索数据 已请求编入索引";
@@ -82,7 +82,8 @@ test("新 URL 进入加载态后只读取该 URL 的新结果", async () => {
 
   await waitForStart;
 
-  const waitForResult = vm.runInContext("waitForInspectionResult('https://new.example/')", context);
+  const inspectionId = await waitForStart;
+  const waitForResult = vm.runInContext(`waitForInspectionResult(${JSON.stringify(inspectionId)})`, context);
   setTimeout(() => {
     context.pageText = "网址不在 Google 上";
     context.inspectionStatus = "not-indexed";
@@ -95,9 +96,29 @@ test("当前检查 URL 不匹配时不能继续请求索引", async () => {
   const { context } = loadContentScript();
   setInspectionStatus(context, "已请求编入索引", "requested");
 
-  const wait = vm.runInContext("waitForInspectionResult('https://new.example/')", context);
+  const wait = vm.runInContext("waitForInspectionResult('new-inspection')", context);
 
-  await assert.rejects(wait, /当前检查的网址与目标 URL 不一致/);
+  await assert.rejects(wait, /当前检查页面已切换/);
+});
+
+test("识别 GSC 当前的未收录文案", () => {
+  const { context } = loadContentScript();
+
+  assert.equal(
+    vm.runInContext('containsAny(normalizedText("网址尚未收录到 Google"), TEXT.notIndexed)', context),
+    true
+  );
+});
+
+test("缺少 GSC 检查标识时使用当前地址跟踪页面", () => {
+  const { context, location } = loadContentScript();
+  location.href = "https://search.google.com/search-console/inspect?resource_id=site";
+  location.search = "?resource_id=site";
+
+  assert.equal(
+    vm.runInContext("getInspectionId()", context),
+    location.href
+  );
 });
 
 test("检查状态未知时不能请求索引", async () => {
