@@ -346,8 +346,12 @@ function findInspectionNavigation() {
       element.getAttribute("aria-label"),
       element.getAttribute("title")
     ].join(" "));
-    return text === "网址检查" || text === "url inspection";
+    return isInspectionNavigationText(text);
   }) || null;
+}
+
+function isInspectionNavigationText(text) {
+  return text.includes("网址检查") || text.includes("url inspection");
 }
 
 function findSearchButton(input) {

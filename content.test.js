@@ -121,6 +121,15 @@ test("缺少 GSC 检查标识时使用当前地址跟踪页面", () => {
   );
 });
 
+test("识别带图标文字的网址检查导航项", () => {
+  const { context } = loadContentScript();
+
+  assert.equal(
+    vm.runInContext('isInspectionNavigationText(normalizedText("search 网址检查"))', context),
+    true
+  );
+});
+
 test("检查状态未知时不能请求索引", async () => {
   const { context } = loadContentScript();
 
