@@ -99,3 +99,22 @@ test("当前检查 URL 不匹配时不能继续请求索引", async () => {
 
   await assert.rejects(wait, /当前检查的网址与目标 URL 不一致/);
 });
+
+test("检查状态未知时不能请求索引", async () => {
+  const { context } = loadContentScript();
+
+  vm.runInContext(`
+    let requestCount = 0;
+    submitInspectionUrl = async () => {};
+    waitForInspectionResult = async () => "unknown";
+    requestIndexing = async () => { requestCount += 1; };
+    log = () => {};
+  `, context);
+
+  await vm.runInContext(`processUrl("https://new.example/", {
+    requestIndexing: true,
+    skipSubmitted: false
+  })`, context);
+
+  assert.equal(vm.runInContext("requestCount", context), 0);
+});

@@ -207,7 +207,12 @@ async function processUrl(url, options) {
     return;
   }
 
-  if (result !== "not-indexed" && result !== "unknown") {
+  if (result === "unknown") {
+    log(`无法确认索引状态，已跳过请求：${url}`);
+    return;
+  }
+
+  if (result !== "not-indexed") {
     log(`跳过：${url}，当前状态 ${result}。`);
     return;
   }
