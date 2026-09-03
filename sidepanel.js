@@ -27,7 +27,7 @@ const ENGINE = {
   gsc: "gsc",
   brave: "brave"
 };
-const GSC_CONTENT_SCRIPT_VERSION = "2026-08-30.10";
+const GSC_CONTENT_SCRIPT_VERSION = "2026-09-03.1";
 const GSC_WAIT = {
   tabLoad: 30000,
   poll: 250

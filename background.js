@@ -144,8 +144,13 @@ function attachDebugger(target) {
   return new Promise((resolve, reject) => {
     chrome.debugger.attach(target, "1.3", () => {
       const error = chrome.runtime.lastError;
-      if (error && !error.message.includes("Another debugger is already attached")) {
-        reject(new Error(error.message));
+      if (error) {
+        const message = error.message || String(error);
+        if (message.includes("Another debugger is already attached")) {
+          reject(new Error("该标签页已被其他调试工具占用。请关闭 DevTools 或其他自动化工具后重试。"));
+          return;
+        }
+        reject(new Error(message));
         return;
       }
       resolve();

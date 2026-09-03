@@ -36,7 +36,7 @@ function loadContentScript() {
   });
 
   vm.runInContext(source, context);
-  vm.runInContext("WAIT.poll = 1; WAIT.inspectionStart = 20; WAIT.result = 40;", context);
+  vm.runInContext("WAIT.poll = 1; WAIT.inspectionStart = 200; WAIT.result = 200;", context);
 
   return { context, location };
 }
@@ -155,6 +155,19 @@ test("检查 URL 时使用真实回车，不点击不精确的候选项", async 
   assert.equal(vm.runInContext("enterCount", context), 1);
 });
 
+test("真实回车未获后台确认时立即失败", async () => {
+  const { context } = loadContentScript();
+
+  vm.runInContext(`
+    chrome.runtime.sendMessage = async () => undefined;
+  `, context);
+
+  await assert.rejects(
+    vm.runInContext("pressEnter({ focus: () => {} })", context),
+    /无法向 GSC 输入框发送真实回车/
+  );
+});
+
 test("请求索引时只选择可见的结构化按钮", () => {
   const { context } = loadContentScript();
 
@@ -169,12 +182,78 @@ test("请求索引时只选择可见的结构化按钮", () => {
   assert.equal(vm.runInContext("findRequestIndexingButton().id", context), "visible");
 });
 
+test("真实点击失败时不使用不受信任的 DOM 点击提交索引", async () => {
+  const { context } = loadContentScript();
+
+  vm.runInContext(`
+    let domClickCount = 0;
+    waitForElement = async () => ({ id: "request" });
+    trustedClickElement = async () => { throw new Error("调试器被占用"); };
+    clickElement = async () => { domClickCount += 1; };
+    log = () => {};
+  `, context);
+
+  await assert.rejects(
+    vm.runInContext("requestIndexing()", context),
+    /调试器被占用/
+  );
+  assert.equal(vm.runInContext("domClickCount", context), 0);
+});
+
+test("请求按钮未响应时仅重试真实点击", async () => {
+  const { context } = loadContentScript();
+
+  vm.runInContext(`
+    let trustedClickCount = 0;
+    let domClickCount = 0;
+    waitForElement = async () => ({ id: "request" });
+    trustedClickElement = async () => { trustedClickCount += 1; };
+    clickElement = async () => { domClickCount += 1; };
+    getGscPageText = () => "";
+    sleep = async () => {};
+    waitForCondition = async () => {};
+    closeRequestResultDialog = async () => {};
+    log = () => {};
+  `, context);
+
+  await vm.runInContext("requestIndexing()", context);
+
+  assert.equal(vm.runInContext("trustedClickCount", context), 2);
+  assert.equal(vm.runInContext("domClickCount", context), 0);
+});
+
+test("单条 URL 的自动化失败会停止队列，避免将后续 URL 标为完成", async () => {
+  const { context } = loadContentScript();
+
+  vm.runInContext(`
+    const processedUrls = [];
+    state.queue = ["https://first.example/", "https://second.example/"];
+    state.running = true;
+    state.stopped = false;
+    processUrl = async (url) => {
+      processedUrls.push(url);
+      throw new Error("真实点击不可用");
+    };
+    log = () => {};
+    broadcastState = () => {};
+    finishQueue = () => {};
+  `, context);
+
+  await vm.runInContext("processQueue({})", context);
+
+  assert.deepEqual(
+    JSON.parse(vm.runInContext("JSON.stringify(processedUrls)", context)),
+    ["https://first.example/"]
+  );
+  assert.equal(vm.runInContext("state.stopped", context), true);
+});
+
 test("状态响应携带内容脚本版本", () => {
   const { context } = loadContentScript();
 
   assert.equal(
     vm.runInContext("publicState().contentScriptVersion", context),
-    "2026-08-30.10"
+    "2026-09-03.1"
   );
 });
 

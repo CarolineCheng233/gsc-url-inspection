@@ -6,15 +6,20 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
-function loadBackground() {
+function loadBackground({ attachError = null } = {}) {
   const source = fs.readFileSync(path.join(__dirname, "background.js"), "utf8");
   let messageListener;
   const commands = [];
+  let lastError = null;
 
   const context = vm.createContext({
     chrome: {
       debugger: {
-        attach: (_target, _version, callback) => callback(),
+        attach: (_target, _version, callback) => {
+          lastError = attachError ? { message: attachError } : null;
+          callback();
+          lastError = null;
+        },
         detach: (_target, callback) => callback(),
         sendCommand: (_target, method, params, callback) => {
           commands.push({ method, params });
@@ -23,7 +28,7 @@ function loadBackground() {
       },
       runtime: {
         get lastError() {
-          return null;
+          return lastError;
         },
         onInstalled: { addListener: () => {} },
         onMessage: {
@@ -79,4 +84,20 @@ test("GSC 真实回车使用 CDP 发送 keyDown 和 keyUp", async () => {
       }
     }
   ]);
+});
+
+test("其他调试工具占用标签页时返回可操作错误，不发送无效 CDP 命令", async () => {
+  const { commands, messageListener } = loadBackground({
+    attachError: "Another debugger is already attached to the tab"
+  });
+  let response;
+
+  messageListener({ type: "GSC_HELPER_CDP_KEY", key: "Enter" }, { tab: { id: 7 } }, (value) => {
+    response = value;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(response.ok, false);
+  assert.match(response.error, /其他调试工具占用/);
+  assert.deepEqual(JSON.parse(JSON.stringify(commands)), []);
 });

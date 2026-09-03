@@ -1,6 +1,6 @@
 "use strict";
 
-const GSC_CONTENT_SCRIPT_VERSION = "2026-08-30.10";
+const GSC_CONTENT_SCRIPT_VERSION = "2026-09-03.1";
 
 const TEXT = {
   indexed: [
@@ -170,9 +170,9 @@ async function processQueue(options) {
       await processUrl(url, options);
     } catch (error) {
       log(`失败：${url} - ${error.message || error}`);
-      if (state.stopped) {
-        break;
-      }
+      state.stopped = true;
+      log("已停止后续 URL，避免在自动化不可用时产生误导性完成状态。");
+      break;
     }
 
     await sleep(WAIT.betweenUrls);
@@ -270,11 +270,11 @@ async function waitForInspectionResult(inspectionId) {
 async function requestIndexing() {
   const button = await waitForElement(findRequestIndexingButton, WAIT.requestButton, "没有找到“请求编入索引”按钮。");
   log("已找到“请求编入索引”按钮，正在点击。");
-  await trustedClickElement(button);
+  await trustedClickElement(button, { allowDomFallback: false });
   await sleep(1000);
   if (!containsAny(getGscPageText(), [...TEXT.requesting, ...TEXT.requested, ...TEXT.requestFailed])) {
-    log("点击后 GSC 未响应，正在基于同一按钮 DOM 重试。");
-    await clickElement(button);
+    log("点击后 GSC 未响应，正在基于同一按钮重试真实点击。");
+    await trustedClickElement(button, { allowDomFallback: false });
   }
   log("已点击“请求编入索引”，等待 GSC 响应。");
 
@@ -342,8 +342,8 @@ async function focusAndSetValue(element, value) {
 async function pressEnter(element) {
   element.focus();
   const response = await chrome.runtime.sendMessage({ type: "GSC_HELPER_CDP_KEY", key: "Enter" });
-  if (response?.ok === false) {
-    throw new Error(response.error || "无法向 GSC 输入框发送真实回车。");
+  if (response?.ok !== true) {
+    throw new Error(response?.error || "无法向 GSC 输入框发送真实回车。");
   }
 }
 
@@ -394,7 +394,7 @@ function dispatchPointerLikeEvent(element, type, x, y) {
   element.dispatchEvent(new MouseEvent(type, eventInit));
 }
 
-async function trustedClickElement(element) {
+async function trustedClickElement(element, { allowDomFallback = true } = {}) {
   element.scrollIntoView({ block: "center", inline: "center" });
   await sleep(100);
 
@@ -409,10 +409,13 @@ async function trustedClickElement(element) {
       y
     });
 
-    if (response?.ok === false) {
+    if (response?.ok !== true) {
       throw new Error(response.error || "CDP 点击失败。");
     }
   } catch (error) {
+    if (!allowDomFallback) {
+      throw new Error(`无法向 GSC 发送真实点击：${error.message || error}`);
+    }
     log(`真实鼠标点击失败，改用 DOM 点击：${error.message || error}`);
     await clickElement(element);
   }
