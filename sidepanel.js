@@ -35,7 +35,7 @@ const GSC_WAIT = {
 const BRAVE_WAIT = {
   contentReady: 30000,
   tabLoad: 30000,
-  betweenUrls: 2500,
+  betweenUrls: 3000,
   poll: 250
 };
 

@@ -20,7 +20,7 @@ function createElement() {
   };
 }
 
-async function loadSidePanel() {
+async function loadSidePanel({ useDefaultBraveDelay = false } = {}) {
   const source = fs.readFileSync(path.join(__dirname, "sidepanel.js"), "utf8");
   const elements = new Map();
   const submittedUrls = [];
@@ -116,7 +116,9 @@ async function loadSidePanel() {
   vm.runInContext(source, context);
   vm.runInContext(`
     BRAVE_WAIT.poll = 1;
-    BRAVE_WAIT.betweenUrls = 1;
+    if (!${useDefaultBraveDelay}) {
+      BRAVE_WAIT.betweenUrls = 1;
+    }
     BRAVE_WAIT.tabLoad = 20;
     BRAVE_WAIT.contentReady = 20;
   `, context);
@@ -156,6 +158,27 @@ test("Brave 队列逐条提交并在两条之间刷新页面", async () => {
   assert.equal(harness.getReloadCount(), 1);
   assert.equal(harness.elements.get("#runState").textContent, "空闲");
   assert.equal(harness.elements.get("#pageStatus").textContent, "Brave 提交任务完成。");
+});
+
+test("Brave 在上一条提交完成后至少等待 3 秒再提交下一条", async () => {
+  const harness = await loadSidePanel({ useDefaultBraveDelay: true });
+  const submittedAt = [];
+  const originalPush = harness.submittedUrls.push.bind(harness.submittedUrls);
+  harness.submittedUrls.push = (url) => {
+    submittedAt.push(Date.now());
+    return originalPush(url);
+  };
+
+  await vm.runInContext(
+    "startBraveQueue(['https://a.example/', 'https://b.example/'])",
+    harness.context
+  );
+
+  assert.equal(submittedAt.length, 2);
+  assert.ok(
+    submittedAt[1] - submittedAt[0] >= 3000,
+    `第二条在 ${submittedAt[1] - submittedAt[0]}ms 后提交，未达到 3 秒间隔。`
+  );
 });
 
 test("侧边栏只在 Brave 官方提交页启用 Brave 模式", async () => {
