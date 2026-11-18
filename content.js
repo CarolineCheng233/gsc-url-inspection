@@ -1,6 +1,6 @@
 "use strict";
 
-const GSC_CONTENT_SCRIPT_VERSION = "2026-09-03.1";
+const GSC_CONTENT_SCRIPT_VERSION = "2026-11-17.3";
 
 const TEXT = {
   indexed: [
@@ -53,7 +53,8 @@ const TEXT = {
 const GSC_SELECTORS = {
   inspectionInput: 'input[role="combobox"][jsname="dSO9oc"]',
   requestIndexing: 'div[role="button"][aria-label][aria-disabled="false"]:has(> .ZFr60d.CeoRYc)',
-  dialogClose: 'button[data-mdc-dialog-action="ok"]'
+  dialogClose: 'button[data-mdc-dialog-action="ok"]',
+  inspectionHeader: "span.PuCZwf"
 };
 
 const WAIT = {
@@ -62,6 +63,7 @@ const WAIT = {
   requestButton: 45000,
   requested: 120000,
   inspectionStart: 20000,
+  sameStatusSettle: 1500,
   betweenUrls: 2500,
   poll: 500
 };
@@ -231,7 +233,7 @@ async function submitInspectionUrl(url) {
   log("已填写 URL，正在使用真实回车进入检查。");
   await pressEnter(input);
 
-  const inspectionId = await waitForInspectionStart(previousInspection);
+  const inspectionId = await waitForInspectionStart(previousInspection, url);
   log("GSC 已开始检查当前 URL。");
   return inspectionId;
 }
@@ -434,32 +436,89 @@ async function closeRequestResultDialog() {
   log("已关闭请求成功提示。");
 }
 
-async function waitForInspectionStart(previousInspection) {
-  return waitForCondition(() => {
-    const pageText = getGscPageText();
-    const inspectionId = getInspectionId();
-    const navigationChanged = location.href !== previousInspection.href
-      || inspectionId !== previousInspection.inspectionId;
-    if (!navigationChanged) {
-      return false;
+async function waitForInspectionStart(previousInspection, targetUrl = "") {
+  let sawChecking = false;
+  let targetShownSince = 0;
+
+  try {
+    return await waitForCondition(() => {
+      const pageText = getGscPageText();
+      const inspectionId = getInspectionId();
+      const navigationChanged = location.href !== previousInspection.href
+        || inspectionId !== previousInspection.inspectionId;
+
+      // GSC 可能先显示加载态、加载完成后才改地址栏，所以加载态在任何时刻出现都要记住。
+      if (containsAny(pageText, TEXT.checking)) {
+        sawChecking = true;
+      }
+
+      if (!navigationChanged) {
+        targetShownSince = 0;
+        return false;
+      }
+
+      if (sawChecking) {
+        return inspectionId;
+      }
+
+      const currentStatus = getVisibleInspectionStatus();
+      if (!currentStatus || currentStatus !== previousInspection.status) {
+        return inspectionId;
+      }
+
+      // 连续两个 URL 状态相同（例如都已收录）时，状态不会变化。
+      // GSC 每次检查都会新建一个结果视图并隐藏旧视图，
+      // 所以以“出现了新的可见标题元素，且其文字等于本次 URL”为准，并短暂稳定后再继续。
+      const header = findVisibleInspectionHeader();
+      const targetShown = Boolean(targetUrl && header
+        && header !== previousInspection.headerElement
+        && normalizeUrl(getHeaderText(header)) === normalizeUrl(targetUrl));
+      if (!targetShown) {
+        targetShownSince = 0;
+        return false;
+      }
+      if (!targetShownSince) {
+        targetShownSince = Date.now();
+      }
+      return Date.now() - targetShownSince >= WAIT.sameStatusSettle ? inspectionId : false;
+    }, WAIT.inspectionStart, "GSC 没有开始检查该 URL，请确认顶部输入框是否可用。");
+  } catch (error) {
+    if (!state.stopped) {
+      const header = findVisibleInspectionHeader();
+      log(`诊断：href 是否变化=${location.href !== previousInspection.href}，`
+        + `id 是否变化=${getInspectionId() !== previousInspection.inspectionId}，`
+        + `出现过加载态=${sawChecking}，状态 ${previousInspection.status || "无"} → ${getVisibleInspectionStatus() || "无"}，`
+        + `页面显示 URL ${previousInspection.displayedUrl || "无"} → ${getHeaderText(header) || "无"}，`
+        + `标题元素是否为新节点=${Boolean(header) && header !== previousInspection.headerElement}，`
+        + `可见标题数=${countVisibleInspectionHeaders()}，当前地址 ${location.href}`);
     }
+    throw error;
+  }
+}
 
-    if (containsAny(pageText, TEXT.checking)) {
-      return inspectionId;
-    }
+// GSC 检查结果页顶部显示被检查 URL 的元素。旧检查结果的视图仍留在 DOM 中但不可见，因此只取可见的那个。
+function findVisibleInspectionHeader() {
+  return Array.from(document.querySelectorAll(GSC_SELECTORS.inspectionHeader))
+    .find((element) => isVisible(element)) || null;
+}
 
-    const currentStatus = getVisibleInspectionStatus();
-    const statusChanged = currentStatus !== previousInspection.status;
+function countVisibleInspectionHeaders() {
+  return Array.from(document.querySelectorAll(GSC_SELECTORS.inspectionHeader))
+    .filter((element) => isVisible(element)).length;
+}
 
-    return !currentStatus || statusChanged ? inspectionId : false;
-  }, WAIT.inspectionStart, "GSC 没有开始检查该 URL，请确认顶部输入框是否可用。");
+function getHeaderText(element) {
+  return element ? String(element.textContent || "").trim() : "";
 }
 
 function getInspectionSnapshot() {
+  const header = findVisibleInspectionHeader();
   return {
     href: location.href,
     inspectionId: getInspectionId(),
-    status: getVisibleInspectionStatus()
+    status: getVisibleInspectionStatus(),
+    headerElement: header,
+    displayedUrl: getHeaderText(header)
   };
 }
 

@@ -130,7 +130,8 @@ test("使用实际 GSC 元素选择器", () => {
     {
       inspectionInput: 'input[role="combobox"][jsname="dSO9oc"]',
       requestIndexing: 'div[role="button"][aria-label][aria-disabled="false"]:has(> .ZFr60d.CeoRYc)',
-      dialogClose: 'button[data-mdc-dialog-action="ok"]'
+      dialogClose: 'button[data-mdc-dialog-action="ok"]',
+      inspectionHeader: "span.PuCZwf"
     }
   );
 });
@@ -253,7 +254,7 @@ test("状态响应携带内容脚本版本", () => {
 
   assert.equal(
     vm.runInContext("publicState().contentScriptVersion", context),
-    "2026-09-03.1"
+    "2026-11-17.3"
   );
 });
 
@@ -274,4 +275,95 @@ test("检查状态未知时不能请求索引", async () => {
   })`, context);
 
   assert.equal(vm.runInContext("requestCount", context), 0);
+});
+
+function setDisplayedUrl(context, url) {
+  // 模拟 GSC：每次检查都新建一个可见标题元素
+  context.headerElement = { textContent: url };
+  vm.runInContext(`findVisibleInspectionHeader = () => headerElement;`, context);
+}
+
+function navigate(location, id) {
+  location.href = `https://search.google.com/search-console/inspect?resource_id=site&id=${id}`;
+  location.search = `?resource_id=site&id=${id}`;
+}
+
+test("连续两个已收录 URL：页面显示目标 URL 后视为检查已开始", async () => {
+  const { context, location } = loadContentScript();
+  vm.runInContext("WAIT.sameStatusSettle = 5;", context);
+  setInspectionStatus(context, "网页已编入索引", "indexed");
+  setDisplayedUrl(context, "https://example.com/");
+
+  const waitForStart = vm.runInContext(`waitForInspectionStart({
+    href: location.href, inspectionId: "old-inspection", status: "indexed",
+    headerElement, displayedUrl: "https://example.com/"
+  }, "https://example.com/de/")`, context);
+
+  setTimeout(() => { navigate(location, "opaque-token"); setDisplayedUrl(context, "https://example.com/de/"); }, 2);
+
+  assert.equal(await waitForStart, "opaque-token");
+});
+
+test("加载态先于地址栏变化出现时也能识别检查已开始", async () => {
+  const { context, location } = loadContentScript();
+  setInspectionStatus(context, "网页已编入索引", "indexed");
+  setDisplayedUrl(context, "https://example.com/");
+
+  const waitForStart = vm.runInContext(`waitForInspectionStart({
+    href: location.href, inspectionId: "old-inspection", status: "indexed",
+    headerElement, displayedUrl: "https://example.com/"
+  }, "https://example.com/de/")`, context);
+
+  setTimeout(() => setInspectionStatus(context, "正在从 google 索引中检索数据", ""), 2);
+  setTimeout(() => { setInspectionStatus(context, "网页已编入索引", "indexed"); navigate(location, "new-token"); }, 10);
+
+  assert.equal(await waitForStart, "new-token");
+});
+
+test("状态相同且页面未显示目标 URL 时不能视为检查已开始", async () => {
+  const { context, location } = loadContentScript();
+  vm.runInContext("WAIT.sameStatusSettle = 5;", context);
+  setInspectionStatus(context, "网页已编入索引", "indexed");
+  setDisplayedUrl(context, "https://example.com/");
+
+  const waitForStart = vm.runInContext(`waitForInspectionStart({
+    href: location.href, inspectionId: "old-inspection", status: "indexed",
+    headerElement, displayedUrl: "https://example.com/"
+  }, "https://example.com/de/")`, context);
+
+  setTimeout(() => { navigate(location, "other"); setDisplayedUrl(context, "https://example.com/fr/"); }, 2);
+
+  await assert.rejects(waitForStart, /GSC 没有开始检查该 URL/);
+});
+
+test("同一 URL 但标题元素未换新时不能视为检查已开始", async () => {
+  const { context, location } = loadContentScript();
+  vm.runInContext("WAIT.sameStatusSettle = 5;", context);
+  setInspectionStatus(context, "网页已编入索引", "indexed");
+  setDisplayedUrl(context, "https://example.com/de/");
+
+  const waitForStart = vm.runInContext(`waitForInspectionStart({
+    href: location.href, inspectionId: "old-inspection", status: "indexed",
+    headerElement, displayedUrl: "https://example.com/de/"
+  }, "https://example.com/de/")`, context);
+
+  setTimeout(() => navigate(location, "other"), 2);
+
+  await assert.rejects(waitForStart, /GSC 没有开始检查该 URL/);
+});
+
+test("第一条 URL 与页面当前显示相同：出现新标题元素即视为检查已开始", async () => {
+  const { context, location } = loadContentScript();
+  vm.runInContext("WAIT.sameStatusSettle = 5;", context);
+  setInspectionStatus(context, "网页已编入索引", "indexed");
+  setDisplayedUrl(context, "https://example.com/");
+
+  const waitForStart = vm.runInContext(`waitForInspectionStart({
+    href: location.href, inspectionId: "old-inspection", status: "indexed",
+    headerElement, displayedUrl: "https://example.com/"
+  }, "https://example.com/")`, context);
+
+  setTimeout(() => { navigate(location, "fresh"); setDisplayedUrl(context, "https://example.com/"); }, 2);
+
+  assert.equal(await waitForStart, "fresh");
 });
