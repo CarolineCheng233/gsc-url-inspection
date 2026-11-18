@@ -248,3 +248,26 @@ test("旧 GSC 内容脚本仍可响应时会刷新页面加载当前版本", asy
   assert.equal(harness.getReloadCount(), reloadsBeforeInspection + 1);
   assert.equal(harness.elements.get("#pageStatus").textContent, "已连接到 Search Console 页面。");
 });
+
+test("sitemap URL 按 lastmod 倒序，缺失 lastmod 的排最后，同一时间保持原顺序", async () => {
+  const harness = await loadSidePanel();
+  harness.context.entries = [
+    { url: "https://a.example/old", lastmod: "2026-01-01", order: 0 },
+    { url: "https://a.example/none", lastmod: "", order: 1 },
+    { url: "https://a.example/new-1", lastmod: "2026-11-17", order: 2 },
+    { url: "https://a.example/mid", lastmod: "2026-06-01T10:00:00+00:00", order: 3 },
+    { url: "https://a.example/bad", lastmod: "not-a-date", order: 4 },
+    { url: "https://a.example/new-2", lastmod: "2026-11-17", order: 5 }
+  ];
+
+  const sorted = vm.runInContext("sortEntriesByLastmod(entries).map((e) => e.url)", harness.context);
+
+  assert.deepEqual(Array.from(sorted), [
+    "https://a.example/new-1",
+    "https://a.example/new-2",
+    "https://a.example/mid",
+    "https://a.example/old",
+    "https://a.example/none",
+    "https://a.example/bad"
+  ]);
+});

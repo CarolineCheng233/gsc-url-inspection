@@ -279,7 +279,7 @@ async function loadSitemap() {
     elements.urlList.value = merged.join("\n");
     updateUrlCount();
     saveDraft();
-    setSitemapStatus(`解析完成，已加入 ${urls.length} 个 URL，去重后共 ${merged.length} 个。`);
+    setSitemapStatus(`解析完成，已加入 ${urls.length} 个 URL（按 lastmod 最近更新在前），去重后共 ${merged.length} 个。`);
   } catch (error) {
     setSitemapStatus(error.message || "解析 sitemap 失败。", true);
   } finally {
@@ -316,10 +316,10 @@ async function collectSitemapUrls(rootUrl) {
       return;
     }
 
-    for (const loc of getChildLocValues(doc.documentElement, "url")) {
-      const pageUrl = normalizeUrl(loc);
+    for (const entry of getUrlEntries(doc.documentElement)) {
+      const pageUrl = normalizeUrl(entry.loc);
       if (pageUrl) {
-        pageUrls.push(pageUrl);
+        pageUrls.push({ url: pageUrl, lastmod: entry.lastmod, order: pageUrls.length });
       }
       if (pageUrls.length >= SITEMAP_LIMIT) {
         break;
@@ -328,7 +328,41 @@ async function collectSitemapUrls(rootUrl) {
   }
 
   await visit(rootUrl, 0);
-  return mergeUrls([], pageUrls);
+  return mergeUrls([], sortEntriesByLastmod(pageUrls).map((entry) => entry.url));
+}
+
+// 读取 <url> 下的 <loc> 与 <lastmod>。
+function getUrlEntries(root) {
+  if (!root) {
+    return [];
+  }
+
+  return Array.from(root.children)
+    .filter((item) => item.localName === "url")
+    .map((item) => {
+      const children = Array.from(item.children);
+      const textOf = (name) => children.find((child) => child.localName === name)?.textContent?.trim() || "";
+      return { loc: textOf("loc"), lastmod: textOf("lastmod") };
+    })
+    .filter((entry) => entry.loc);
+}
+
+// 按 lastmod 倒序（最近更新在前）；没有或无法解析 lastmod 的排最后；时间相同时保持 sitemap 原顺序。
+function sortEntriesByLastmod(entries) {
+  const timeOf = (entry) => {
+    const time = Date.parse(entry.lastmod || "");
+    return Number.isNaN(time) ? -Infinity : time;
+  };
+  return entries.slice().sort((a, b) => {
+    const diff = timeOf(b) - timeOf(a);
+    if (diff !== 0 && Number.isFinite(diff)) {
+      return diff;
+    }
+    if (timeOf(a) !== timeOf(b)) {
+      return timeOf(a) === -Infinity ? 1 : -1;
+    }
+    return a.order - b.order;
+  });
 }
 
 function getChildLocValues(root, itemLocalName) {
